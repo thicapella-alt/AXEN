@@ -224,6 +224,20 @@ def run_scrapers(
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _check_connectivity(session: requests.Session) -> bool:
+    """Quick connectivity probe. Returns False if outbound HTTP is blocked."""
+    try:
+        r = session.get("https://beroc.com.br/products.json?limit=1", timeout=10)
+        # Any HTTP response (even 403 from the site) means network is reachable
+        return r.status_code != -1
+    except requests.exceptions.ConnectionError as e:
+        if "allowlist" in str(e).lower() or "host" in str(e).lower():
+            return False
+        return False
+    except Exception:
+        return True  # assume reachable on unexpected errors
+
+
 def main() -> None:
     args = build_args()
 
@@ -233,6 +247,25 @@ def main() -> None:
                   f"Playwright: {'off' if args.no_playwright else 'on'}")
 
     session = make_session(use_cloudscraper=args.cloudscraper)
+
+    # Pre-flight connectivity check
+    try:
+        probe = session.get("https://beroc.com.br/products.json?limit=1", timeout=10)
+        if "allowlist" in probe.text or "not in allowlist" in probe.text:
+            console.print(
+                "\n[red bold]Sem acesso à internet externa.[/red bold]\n"
+                "Este ambiente bloqueou conexões de saída ('Host not in allowlist').\n\n"
+                "Execute o scraper na sua máquina local:\n"
+                "  1. Clone o repositório\n"
+                "  2. pip install -r requirements.txt\n"
+                "  3. python main.py --cloudscraper\n\n"
+                "Se os sites ainda bloquearem (IP de VPS/datacenter), configure um proxy residencial:\n"
+                "  export HTTPS_PROXY=http://user:senha@proxy.exemplo.com:8080\n"
+                "  python main.py --cloudscraper"
+            )
+            sys.exit(2)
+    except Exception:
+        pass  # network up but site responded unusually — continue
     products = run_scrapers(args.stores, session, use_playwright=not args.no_playwright)
 
     if not products:

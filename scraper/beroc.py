@@ -129,8 +129,16 @@ def scrape(session: requests.Session) -> list[Product]:
         logger.info("Beroc: no collection match for %s — scanning full catalog", missing)
         all_raw = _fetch_collection_json("todos-os-produtos", session)
         if not all_raw:
-            # Last resort: /products.json
-            all_raw = _fetch_collection_json("", session)  # won't work, but try
+            # Last resort: public /products.json root endpoint
+            all_raw = _fetch_collection_json("__all", session)
+            if not all_raw:
+                try:
+                    r = session.get(f"{STORE_URL}/products.json",
+                                    params={"limit": 250}, timeout=20)
+                    if r.status_code == 200:
+                        all_raw = r.json().get("products", [])
+                except Exception:
+                    pass
 
         for raw in all_raw:
             pid = raw.get("id")
