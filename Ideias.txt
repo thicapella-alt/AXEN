@@ -1,0 +1,15 @@
+- Incorporar mercado livre no scraper - OK
+- Incluir comparação de prazos - OK, porém é possível melhorar
+- Agente que roda diariamente para mapear possiveis promoções dos principais concorrentes, com base nessa pesquisa de preços, o agente deve gerar uma lista de produtos que tiveram alteração de preços
+- Com base nas promoções o agente deve sugerir preçco para produtos AXEN
+- Agente que roda diariamente para entender qual o posicionamento dos anúncios da AXEN no MELI. Como base nesse posicionamento sugerir investimento de ADS para melhorar a posição nas buscas
+- Front-end que mostra todas as informações estratégicas da empresa, como competitividade em preço, prazo, reclamações, reputação e posicionamento dos anúncios nas paginas de busca do mercado livre
+- Esse agente deve rodar diariamente e múltiplas vezes por dia em horário pré determinados e que sejam configuráveis via front end
+- Com base nas informações coletadas, o agente deve sugerir melhorias como por exemplo baixar o preço do item A, investir em ADS do item B visando melhorar o posicionamento na pagina de buscas.
+- Esse agente também deve coletar informações de vendas, com o objetivo de tirar insights de vendas como por exemplo região X vende mais o item A na cor Y 
+- Front-end onde consigo configurar os preços dos modelos da AXEN, baseado no output dos concorrentes e essa informação ser integrada no MercadoLivre, shoopee e loja online na nuvemshop
+- Calculo de ROAS automático quando investir em ADs 
+
+- Dashboard de gestão da marca nas distintas plataformas de forma unificada
+- Possibilidade de conexão com gateways de frete como intellipost e mandaê. Estratégia inicial do site na nuvemshop - frete via dropsshing e eventualmente migrar para modelo da mandae
+- 

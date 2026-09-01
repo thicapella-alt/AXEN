@@ -1,0 +1,28 @@
+[Unit]
+Description=AXEN Intelligence — Scheduler (scraper diário 07:00 BRT)
+Documentation=https://github.com/SEU_USUARIO/axen-intelligence
+After=network.target axen-api.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/axen
+EnvironmentFile=/var/www/axen/.env
+
+ExecStart=/var/www/axen/venv/bin/python axen_scheduler.py
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axen-scheduler
+
+# O Chromium (Playwright) pode usar até 500 MB no pico do scrape
+# Fora do scrape o processo consome < 30 MB
+MemoryMax=600M
+MemorySwapMax=400M
+
+[Install]
+WantedBy=multi-user.target
