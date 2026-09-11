@@ -1,0 +1,32 @@
+[Unit]
+Description=AXEN Intelligence — API FastAPI
+Documentation=https://github.com/SEU_USUARIO/axen-intelligence
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/axen
+EnvironmentFile=/var/www/axen/.env
+
+# 1 worker apenas (máquina 1 GB RAM)
+ExecStart=/var/www/axen/venv/bin/uvicorn api.axen_main:app \
+    --host 127.0.0.1 \
+    --port 8001 \
+    --workers 1 \
+    --log-level info
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axen-api
+
+# Limites de memória — protege o Tradebit de ser afetado
+MemoryMax=400M
+MemorySwapMax=200M
+
+[Install]
+WantedBy=multi-user.target

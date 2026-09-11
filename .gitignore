@@ -1,0 +1,48 @@
+# Ambiente e segredos
+.env
+*.env
+
+# Banco de dados
+axen.db
+axen.db-shm
+axen.db-wal
+
+# Logs e dados coletados
+logs/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# Node / Frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Arquivos de scraper (gerados em runtime)
+axen_competitive_prices.csv
+axen_competitive_summary.csv
+axen_competitive_delivery.csv
+axen_competitive_promotions.csv
+axen_delivery_detail.csv
+
+# Tokens OAuth (gerados em runtime)
+ml_tokens.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude Code local settings
+.claude/
