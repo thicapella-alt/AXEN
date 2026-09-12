@@ -97,17 +97,45 @@ def _abbr_color(color: str) -> str:
     return base
 
 
-def _extract_model(title: str) -> str:
-    """Modelo comercial — busca o padrão 'Axen <Modelo>' no título do anúncio."""
-    m = re.search(r"\bAxen\s+([A-Za-zÀ-ÿ]+)", title or "", re.IGNORECASE)
+# Tamanho no formato "19 Cm" / "18,5 Cm" / "20.5cm" — usado como fallback
+# quando o anúncio não tem variação cadastrada no ML (tamanho/cor só existem
+# como texto solto no título, ex. "Axen Forge Cinza 19 Cm").
+_SIZE_IN_TITLE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*[Cc][Mm]\b")
+
+
+def _parse_title(title: str) -> tuple[str, str, str]:
+    """
+    Extrai (model, color, size) direto do título do anúncio.
+    Ex.: 'Pulseira Masculina Aço Inox Axen Forge Cinza 19 Cm'
+         → ('FORGE', 'Cinza', '19')
+    `color`/`size` aqui são só o FALLBACK para quando o item não tem
+    variações (variação sempre tem prioridade — ver suggest_sku/resolve_size_color).
+    """
+    title = title or ""
+    model = "PROD"
+    model_end = 0
+
+    m = re.search(r"\bAxen\s+([A-Za-zÀ-ÿ]+)", title, re.IGNORECASE)
     if m:
-        return _slug_word(m.group(1))
-    # Fallback: primeira palavra "significativa" do título (ignora tamanho/gênero/etc.)
-    for word in (title or "").split():
-        w_clean = re.sub(r"[^a-zà-ÿ]", "", _strip_accents(word).lower())
-        if len(w_clean) > 3 and w_clean not in _STOPWORDS:
-            return _slug_word(word)
-    return "PROD"
+        model = _slug_word(m.group(1))
+        model_end = m.end()
+    else:
+        # Fallback: primeira palavra "significativa" do título (ignora tamanho/gênero/etc.)
+        for word in title.split():
+            w_clean = re.sub(r"[^a-zà-ÿ]", "", _strip_accents(word).lower())
+            if len(w_clean) > 3 and w_clean not in _STOPWORDS:
+                model = _slug_word(word)
+                break
+
+    color = ""
+    size = ""
+    size_m = _SIZE_IN_TITLE_RE.search(title)
+    if size_m:
+        size = size_m.group(1).replace(",", ".")
+        if model_end and model_end < size_m.start():
+            color = title[model_end:size_m.start()].strip()
+
+    return model, color, size
 
 
 def _extract_attr(variation: dict, attr_id: str) -> str:
@@ -117,16 +145,28 @@ def _extract_attr(variation: dict, attr_id: str) -> str:
     return ""
 
 
+def resolve_size_color(title: str, variation: dict) -> tuple[str, str]:
+    """
+    Tamanho/cor — prioriza attribute_combinations da variação (mais confiável,
+    é dado estruturado do ML); cai pro texto do título quando o anúncio não
+    tem variação cadastrada (ver _parse_title).
+    """
+    _, title_color, title_size = _parse_title(title)
+    size = _extract_attr(variation, "SIZE") or title_size
+    color = _extract_attr(variation, "COLOR") or title_color
+    return size, color
+
+
 def suggest_sku(title: str, variation: dict) -> str:
     """
-    Sugere um sku_axen a partir do título do anúncio + atributos da variação.
-    Ex.: título "... Axen Forge Cinza 21 Cm", SIZE='21', COLOR='Cinza'
-         → 'FORGE-21-CIN'.
+    Sugere um sku_axen a partir do título do anúncio + atributos da variação
+    (com fallback pro texto do título quando não há variação — ver
+    resolve_size_color). Ex.: título "... Axen Forge Cinza 21 Cm" →
+    'FORGE-21-CIN', com ou sem variação cadastrada no ML.
     Heurística, não é oficial — o Thiago revisa/ajusta depois.
     """
-    model = _extract_model(title)
-    size = _extract_attr(variation, "SIZE")
-    color = _extract_attr(variation, "COLOR")
+    model, _, _ = _parse_title(title)
+    size, color = resolve_size_color(title, variation)
     parts = [model]
     if size:
         parts.append(_slug_word(size, 4))
@@ -269,12 +309,14 @@ def write_to_db(items: list[dict], db_path: str, brand: str = "AXEN") -> dict:
                     known_skus.add(sku)
                     listings_new += 1
 
+                model, _, _ = _parse_title(title)
+                size, color = resolve_size_color(title, v)
                 conn.execute(
                     """INSERT INTO products
                        (sku_axen, brand, model, size, color, active, notes, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, 1, 'SKU sugerido automaticamente por scripts/map_listings.py — revisar', ?, ?)
                        ON CONFLICT(sku_axen) DO NOTHING""",
-                    (sku, brand, _extract_model(title), _extract_attr(v, "SIZE"), _extract_attr(v, "COLOR"), now, now),
+                    (sku, brand, model, size, color, now, now),
                 )
                 if conn.execute("SELECT changes()").fetchone()[0]:
                     products_created += 1
