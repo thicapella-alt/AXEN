@@ -1,0 +1,14 @@
+{
+  "inventory_id": "PJVF21758",
+  "total": 1,
+  "available_quantity": 1,
+  "not_available_quantity": 0,
+  "not_available_detail": [],
+  "external_references": [
+    {
+      "type": "item",
+      "id": "MLB6882560628",
+      "variation_id": 203113107597
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "total": 0,
+  "limit": 50,
+  "questions": [],
+  "filters": {
+    "limit": 50,
+    "offset": 0,
+    "api_version": "4",
+    "is_admin": false,
+    "sorts": [],
+    "caller": 92293099,
+    "seller": 92293099,
+    "status": "UNANSWERED"
+  },
+  "available_filters": [
+    {
+      "id": "item",
+      "name": "Item",
+      "type": "text"
+    },
+    {
+      "id": "from",
+      "name": "From user id",
+      "type": "number"
+    },
+    {
+      "id": "totalDivisions",
+      "name": "Total divisions",
+      "type": "number"
+    },
+    {
+      "id": "division",
+      "name": "Division",
+      "type": "number"
+    },
+    {
+      "id": "status",
+      "name": "Status",
+      "type": "text",
+      "values": [
+        "ANSWERED",
+        "BANNED",
+        "CLOSED_UNANSWERED",
+        "DELETED",
+        "DISABLED",
+        "UNDER_REVIEW"
+      ]
+    }
+  ],
+  "available_sorts": [
+    "item_id",
+    "from_id",
+    "date_created",
+    "seller_id"
+  ]
+}
