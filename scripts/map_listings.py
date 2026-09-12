@@ -167,6 +167,17 @@ def _find_attr(variation: dict, ids: list[str], names: list[str]) -> str:
     return ""
 
 
+def _clean_size_value(size: str) -> str:
+    """
+    Alguns atributos de tamanho do ML vêm com a unidade embutida no
+    value_name (ex. Comprimento/Diâmetro = '20.5 cm'), diferente de
+    Tamanho, que vem só o número ('19'). Extrai só a parte numérica pra
+    não gerar sku tipo 'DRIFT-205C-PTO' (com a unidade cortada no meio).
+    """
+    m = re.match(r"\s*(\d+(?:[.,]\d+)?)", size or "")
+    return m.group(1) if m else (size or "")
+
+
 def resolve_size_color(title: str, variation: dict) -> tuple[str, str]:
     """
     Tamanho/cor — prioriza attribute_combinations da variação (mais confiável,
@@ -175,7 +186,8 @@ def resolve_size_color(title: str, variation: dict) -> tuple[str, str]:
     tamanho/cor reconhecido (ver _parse_title).
     """
     _, title_color, title_size = _parse_title(title)
-    size = _find_attr(variation, _SIZE_ATTR_IDS, _SIZE_ATTR_NAMES) or title_size
+    raw_size = _find_attr(variation, _SIZE_ATTR_IDS, _SIZE_ATTR_NAMES)
+    size = _clean_size_value(raw_size) if raw_size else title_size
     color = _find_attr(variation, _COLOR_ATTR_IDS, _COLOR_ATTR_NAMES) or title_color
     return size, color
 
