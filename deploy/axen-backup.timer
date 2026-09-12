@@ -1,0 +1,18 @@
+[Unit]
+Description=AXEN Intelligence — Timer do backup diário do axen.db (item 0.7)
+
+[Timer]
+# OnCalendar é interpretado no horário LOCAL do servidor (não BRT
+# explicitamente — systemd não aceita fuso embutido em OnCalendar).
+# 03:00 aqui assume que o servidor está configurado em America/Sao_Paulo.
+# Confira antes de ativar:
+#   timedatectl show --property=Timezone
+# Se o servidor estiver em UTC (padrão comum em droplets DigitalOcean),
+# troque para 06:00 (03:00 BRT = 06:00 UTC) ou rode
+# `timedatectl set-timezone America/Sao_Paulo` primeiro.
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
