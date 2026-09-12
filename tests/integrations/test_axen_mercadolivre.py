@@ -685,7 +685,7 @@ class TestGetClaimsSearch:
         url = client.get.call_args[0][0]
         assert url.endswith("/post-purchase/v1/claims/search")
         params = client.get.call_args[1]["params"]
-        assert params["player_id"] == "123456789"
+        assert params["player_user_id"] == "123456789"
         assert params["player_role"] == "respondent"
 
 
