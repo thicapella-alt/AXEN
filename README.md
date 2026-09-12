@@ -242,6 +242,19 @@ Ative individualmente em `.env` apenas quando as credenciais estiverem configura
 
 Consulte `.env.example` para a lista completa de variáveis por plataforma.
 
+### Google Sheets (leitura)
+
+`integrations/axen_sheets.py` lê as planilhas "DRE AXEN" (abas
+`Movimentos`/`Contagem`) e "Compras" via service account — o VPS não
+depende de uma conta Google pessoal.
+
+- Passos de setup no Google Cloud Console: `docs/google-sheets-service-account-setup.md`
+- Layout exato das abas `Movimentos`/`Contagem`: `docs/movimentos-contagem-sheets.md`
+
+Somente leitura: o módulo valida cada linha e devolve dataclasses
+tipadas (`MovimentoRow`/`ContagemRow`) + uma lista de erros por linha
+inválida — não grava em nenhuma tabela do banco.
+
 ---
 
 ## Variáveis de ambiente — referência rápida
@@ -253,6 +266,10 @@ Consulte `.env.example` para a lista completa de variáveis por plataforma.
 | `ML_CLIENT_ID` | — | Client ID do app ML |
 | `ML_CLIENT_SECRET` | — | Client Secret do app ML |
 | `ML_SELLER_ID` | — | Seller ID no ML |
+| `GOOGLE_SHEETS_ENABLED` | `false` | Liga a leitura das planilhas Google Sheets |
+| `GOOGLE_SHEETS_CREDENTIALS_PATH` | — | Caminho do JSON da service account |
+| `GOOGLE_SHEETS_DRE_ID` | — | ID da planilha "DRE AXEN" |
+| `GOOGLE_SHEETS_COMPRAS_ID` | — | ID da planilha "Compras" |
 | `NUVEMSHOP_ENABLED` | `false` | Liga a integração com Nuvemshop |
 | `NUVEMSHOP_ACCESS_TOKEN` | — | Token de acesso Nuvemshop |
 | `NUVEMSHOP_USER_ID` | — | User ID da loja Nuvemshop |

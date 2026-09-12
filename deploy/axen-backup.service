@@ -1,0 +1,23 @@
+[Unit]
+Description=AXEN Intelligence — Backup diário do axen.db (item 0.7)
+Documentation=https://github.com/SEU_USUARIO/axen-intelligence
+After=network.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/axen
+EnvironmentFile=/var/www/axen/.env
+
+# --backup-dir explícito: o serviço roda como www-data (mesmo usuário do
+# axen-scheduler/axen-api), e "~" resolveria para o home desse usuário de
+# sistema, não /root — por isso um caminho absoluto em vez do padrão
+# ~/backups do script (que serve pra quando você rodar manualmente via
+# SSH como root, onde ~ = /root). Ajuste o caminho abaixo se preferir
+# outro lugar.
+ExecStart=/var/www/axen/venv/bin/python scripts/backup_axen_db.py --backup-dir /var/www/axen/backups
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axen-backup
