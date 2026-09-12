@@ -138,10 +138,32 @@ def _parse_title(title: str) -> tuple[str, str, str]:
     return model, color, size
 
 
-def _extract_attr(variation: dict, attr_id: str) -> str:
-    for c in (variation or {}).get("attribute_combinations") or []:
-        if (c.get("id") or "").upper() == attr_id:
-            return (c.get("value_name") or "").strip()
+# A AXEN não usa um único nome de atributo pra tamanho em todos os anúncios —
+# achado ao vivo na 1ª rodada: o Drift usa "Comprimento"/"Diâmetro" (não
+# "Tamanho"), então procuramos por qualquer um desses id/nome, nessa ordem
+# de prioridade (o 1º que aparecer na variação vence).
+_SIZE_ATTR_IDS = ["SIZE", "LENGTH", "DIAMETER"]
+_SIZE_ATTR_NAMES = ["tamanho", "comprimento", "diametro"]
+_COLOR_ATTR_IDS = ["COLOR"]
+_COLOR_ATTR_NAMES = ["cor"]
+
+
+def _find_attr(variation: dict, ids: list[str], names: list[str]) -> str:
+    """
+    Procura um attribute_combination cujo id OU nome (sem acento, minúsculo)
+    bata com algum candidato — nessa ordem de prioridade — e retorna o
+    value_name. Vazio se nenhum atributo da variação bater com nada.
+    """
+    combos = (variation or {}).get("attribute_combinations") or []
+    by_id = {(c.get("id") or "").upper(): c for c in combos}
+    by_name = {_strip_accents((c.get("name") or "")).lower(): c for c in combos}
+
+    for attr_id in ids:
+        if attr_id in by_id:
+            return (by_id[attr_id].get("value_name") or "").strip()
+    for name in names:
+        if name in by_name:
+            return (by_name[name].get("value_name") or "").strip()
     return ""
 
 
@@ -149,11 +171,12 @@ def resolve_size_color(title: str, variation: dict) -> tuple[str, str]:
     """
     Tamanho/cor — prioriza attribute_combinations da variação (mais confiável,
     é dado estruturado do ML); cai pro texto do título quando o anúncio não
-    tem variação cadastrada (ver _parse_title).
+    tem variação cadastrada, ou quando a variação não tem nenhum atributo de
+    tamanho/cor reconhecido (ver _parse_title).
     """
     _, title_color, title_size = _parse_title(title)
-    size = _extract_attr(variation, "SIZE") or title_size
-    color = _extract_attr(variation, "COLOR") or title_color
+    size = _find_attr(variation, _SIZE_ATTR_IDS, _SIZE_ATTR_NAMES) or title_size
+    color = _find_attr(variation, _COLOR_ATTR_IDS, _COLOR_ATTR_NAMES) or title_color
     return size, color
 
 
