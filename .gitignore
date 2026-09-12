@@ -35,6 +35,13 @@ axen_delivery_detail.csv
 # Tokens OAuth (gerados em runtime)
 ml_tokens.json
 
+# Fixtures do spike de API ML com dado real de cliente (nome/endereço) —
+# nunca commitar. Versões .redacted.json (sem PII) são o que vai pro repo.
+# Ver tests/fixtures/ml/README.md.
+tests/fixtures/ml/orders_search.json
+tests/fixtures/ml/order_detail.json
+tests/fixtures/ml/shipment_detail.json
+
 # OS
 .DS_Store
 Thumbs.db
