@@ -566,15 +566,18 @@ class MercadoLivreIntegration(BaseIntegration):
 
     def get_claims_search(self) -> dict:
         """
-        GET /post-purchase/v1/claims/search?player_id=<seller>&player_role=respondent
+        GET /post-purchase/v1/claims/search?player_user_id=<seller>&player_role=respondent
 
-        Requires a claims-related OAuth scope on the application — if this
-        returns 401/403, the app registration likely needs that scope added
-        (see tests/fixtures/ml/README.md for what the spike found).
+        Confirmed via Fase 0 / item 0.2 spike: the API rejects `player_id`
+        with 400 ("Invalid parameters... [player_role and player_user_id]")
+        — the correct param is `player_user_id`. If this still returns
+        401/403 after that fix, the app registration likely needs a
+        claims-related OAuth scope added (see tests/fixtures/ml/README.md
+        for what the spike found).
         """
         return self._get_authed(
             "/post-purchase/v1/claims/search",
-            player_id=self._seller_id,
+            player_user_id=self._seller_id,
             player_role="respondent",
         )
 
