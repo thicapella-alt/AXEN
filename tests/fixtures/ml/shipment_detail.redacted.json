@@ -1,0 +1,240 @@
+{
+  "substatus_history": [
+    {
+      "date": "2026-09-11T20:19:07.000-04:00",
+      "substatus": "in_warehouse",
+      "status": "ready_to_ship"
+    }
+  ],
+  "snapshot_packing": {
+    "snapshot_id": "c3b3436f-5a88-4409-8d98-051db186a75c",
+    "pack_hash": "1"
+  },
+  "threshold_cancellation": null,
+  "receiver_id": 386870970,
+  "base_cost": 23.3,
+  "status_history": {
+    "date_shipped": null,
+    "date_returned": null,
+    "date_delivered": null,
+    "date_first_visit": null,
+    "date_not_delivered": null,
+    "date_cancelled": null,
+    "date_handling": "2026-09-11T20:19:07.000-04:00",
+    "date_ready_to_ship": "2026-09-11T20:19:07.000-04:00"
+  },
+  "type": "forward",
+  "return_details": null,
+  "sender_id": 92293099,
+  "mode": "me2",
+  "order_cost": 155,
+  "priority_class": {
+    "id": "10"
+  },
+  "service_id": 157861,
+  "shipping_items": [
+    {
+      "item_ponderation": null,
+      "quantity": 1,
+      "measurable_picked_quantity": null,
+      "dimensions_source": {
+        "origin": "fd",
+        "id": "MLB7318432106__1"
+      },
+      "description": "Pulseira Masculina Aço Inox Corrente Trançada Axen Forge Cinza 21 Cm",
+      "user_product_id": "MLBU4545878189",
+      "sender_id": 92293099,
+      "domain_id": null,
+      "id": "MLB7318432106",
+      "bundle": null,
+      "dimensions": "5.0x19.0x19.0,70.0"
+    }
+  ],
+  "tracking_number": null,
+  "cost_components": {
+    "loyal_discount": 0,
+    "special_discount": 0,
+    "compensation": 0,
+    "gap_discount": 0,
+    "ratio": 43.75
+  },
+  "id": 47994433273,
+  "tracking_method": "MEL Distribution",
+  "last_updated": "2026-09-11T20:19:07.934-04:00",
+  "items_types": [
+    "conveyable",
+    "new"
+  ],
+  "comments": null,
+  "substatus": "in_warehouse",
+  "date_created": "2026-09-11T20:19:02.827-04:00",
+  "date_first_printed": null,
+  "created_by": "receiver",
+  "application_id": null,
+  "shipping_option": {
+    "processing_time": null,
+    "cost": 0,
+    "estimated_schedule_limit": {
+      "date": null
+    },
+    "shipping_method_id": 512045,
+    "estimated_delivery_final": {
+      "date": null
+    },
+    "buffering": {
+      "date": "2026-09-14T00:00:00.000Z"
+    },
+    "desired_promised_delivery": {
+      "from": null
+    },
+    "pickup_promise": {
+      "from": null,
+      "to": null
+    },
+    "list_cost": 20.45,
+    "estimated_delivery_limit": {
+      "date": null
+    },
+    "priority_class": {
+      "id": "10"
+    },
+    "delivery_promise": "estimated",
+    "delivery_type": "estimated",
+    "estimated_delivery_time": {
+      "date": "2026-09-15T00:00:00.000-03:00",
+      "pay_before": "2026-09-14T21:15:00.000-03:00",
+      "schedule": null,
+      "unit": "hour",
+      "offset": {
+        "date": null,
+        "shipping": null
+      },
+      "shipping": 24,
+      "time_frame": {
+        "from": null,
+        "to": null
+      },
+      "handling": 0,
+      "type": "known"
+    },
+    "name": "Prioritario",
+    "id": 2410361041,
+    "estimated_delivery_extended": {
+      "date": null
+    },
+    "currency_id": "BRL"
+  },
+  "tags": [],
+  "sender_address": {
+    "country": {
+      "id": "BR",
+      "name": "Brasil"
+    },
+    "address_line": "[REDACTED]",
+    "types": [
+      "logistic_center_BRSC02",
+      "warehouse"
+    ],
+    "scoring": null,
+    "agency": null,
+    "city": {
+      "id": "TUxCQ0dPVjUyMzEx",
+      "name": "Governador Celso Ramos"
+    },
+    "geolocation_type": null,
+    "latitude": "[REDACTED]",
+    "municipality": {
+      "id": null,
+      "name": null
+    },
+    "version": null,
+    "location_id": null,
+    "street_name": "[REDACTED]",
+    "zip_code": "[REDACTED]",
+    "geolocation_source": null,
+    "node": {
+      "logistic_center_id": "BRSC02",
+      "node_id": "BRSC02"
+    },
+    "intersection": null,
+    "street_number": "[REDACTED]",
+    "comment": "[REDACTED]",
+    "id": null,
+    "state": {
+      "id": "BR-SC",
+      "name": "Santa Catarina"
+    },
+    "neighborhood": {
+      "id": null,
+      "name": "Guaporanga"
+    },
+    "geolocation_last_updated": null,
+    "longitude": "[REDACTED]"
+  },
+  "sibling": {
+    "reason": null,
+    "sibling_id": null,
+    "description": null,
+    "source": null,
+    "date_created": null,
+    "last_updated": null
+  },
+  "return_tracking_number": null,
+  "site_id": "MLB",
+  "carrier_info": null,
+  "market_place": "MELI",
+  "receiver_address": {
+    "country": {
+      "id": "BR",
+      "name": "Brasil"
+    },
+    "city": {
+      "id": "TUxCQ0dSQTgzMTU3",
+      "name": "Grão Pará"
+    },
+    "geolocation_type": "ROOFTOP",
+    "latitude": "[REDACTED]",
+    "municipality": {
+      "id": null,
+      "name": null
+    },
+    "location_id": 6221797,
+    "street_name": "[REDACTED]",
+    "zip_code": "[REDACTED]",
+    "intersection": null,
+    "receiver_name": "[REDACTED]",
+    "id": 1115628298,
+    "state": {
+      "id": "BR-SC",
+      "name": "Santa Catarina"
+    },
+    "longitude": "[REDACTED]",
+    "address_line": "[REDACTED]",
+    "types": [
+      "billing",
+      "default_buying_address",
+      "default_return_address",
+      "default_selling_address",
+      "shipping"
+    ],
+    "scoring": 1.0,
+    "agency": null,
+    "version": "BR-8bc9a9f725a154f2759bf3135670e561",
+    "geolocation_source": "geolocation-visits",
+    "delivery_preference": "residential",
+    "node": null,
+    "street_number": "[REDACTED]",
+    "comment": "[REDACTED]",
+    "neighborhood": {
+      "id": null,
+      "name": "Centro"
+    },
+    "geolocation_last_updated": "2024-07-16T17:13:45.86Z",
+    "receiver_phone": "[REDACTED]"
+  },
+  "customer_id": null,
+  "order_id": 2000018415699106,
+  "quotation": null,
+  "status": "ready_to_ship",
+  "logistic_type": "fulfillment"
+}

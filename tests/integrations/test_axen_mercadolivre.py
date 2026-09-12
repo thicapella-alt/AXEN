@@ -577,3 +577,228 @@ class TestGetAdMetrics:
         _ml_env(monkeypatch)
         client = _build_client(get_body=[])
         assert MercadoLivreIntegration(client=client).get_ad_metrics() == []
+
+
+# ── User-authorized (Authorization Code) endpoints — Fase 0 / item 0.2 spike ───
+#
+# These methods use _get_authed() / _get_user_token(), which delegates to
+# api.routers.auth_ml.refresh_token_if_needed() instead of this class's own
+# client-credentials _get_token(). So here we monkeypatch that function
+# directly rather than relying on the mock client's .post() (which is only
+# used by the client-credentials flow).
+
+def _patch_user_token(monkeypatch, token="user_token_xyz"):
+    import api.routers.auth_ml as auth_ml
+    monkeypatch.setattr(auth_ml, "refresh_token_if_needed", lambda: token)
+
+
+def _get_only_client(get_body=None, get_status: int = 200) -> MagicMock:
+    """Mock client with only .get() wired — .post() must not be called."""
+    client = MagicMock()
+    client.get.return_value = _mock_response(get_body or {}, get_status)
+    return client
+
+
+class TestGetUserToken:
+
+    def test_returns_token_from_refresh_token_if_needed(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch, token="abc123")
+        integration = MercadoLivreIntegration(client=MagicMock())
+        assert integration._get_user_token() == "abc123"
+
+    def test_raises_when_no_token_available(self, monkeypatch):
+        _ml_env(monkeypatch)
+        import api.routers.auth_ml as auth_ml
+        monkeypatch.setattr(auth_ml, "refresh_token_if_needed", lambda: None)
+        integration = MercadoLivreIntegration(client=MagicMock())
+        with pytest.raises(RuntimeError):
+            integration._get_user_token()
+
+
+class TestGetOrderDetail:
+
+    def test_calls_orders_endpoint_with_id(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"id": 555, "status": "paid"})
+        result = MercadoLivreIntegration(client=client).get_order_detail(555)
+        assert result == {"id": 555, "status": "paid"}
+        url = client.get.call_args[0][0]
+        assert url.endswith("/orders/555")
+
+    def test_uses_user_token_not_client_credentials(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch, token="user_tok")
+        client = _get_only_client(get_body={"id": 1})
+        MercadoLivreIntegration(client=client).get_order_detail(1)
+        client.post.assert_not_called()
+        headers = client.get.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer user_tok"
+
+
+class TestGetShipmentDetail:
+
+    def test_calls_shipments_endpoint_with_id(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"id": 999, "status": "delivered"})
+        result = MercadoLivreIntegration(client=client).get_shipment_detail(999)
+        assert result == {"id": 999, "status": "delivered"}
+        url = client.get.call_args[0][0]
+        assert url.endswith("/shipments/999")
+
+
+class TestGetItemDetail:
+
+    def test_calls_items_endpoint_with_attributes_filter(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"id": "MLB1", "pictures": [], "variations": []})
+        result = MercadoLivreIntegration(client=client).get_item_detail("MLB1")
+        assert result["id"] == "MLB1"
+        url = client.get.call_args[0][0]
+        assert url.endswith("/items/MLB1")
+        params = client.get.call_args[1]["params"]
+        assert params["attributes"] == "id,title,pictures,variations"
+
+
+class TestGetInventoryStock:
+
+    def test_calls_inventories_stock_fulfillment_endpoint(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"total": 10})
+        result = MercadoLivreIntegration(client=client).get_inventory_stock("INV1")
+        assert result == {"total": 10}
+        url = client.get.call_args[0][0]
+        assert url.endswith("/inventories/INV1/stock/fulfillment")
+
+
+class TestGetClaimsSearch:
+
+    def test_calls_claims_search_with_seller_as_respondent(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"data": []})
+        MercadoLivreIntegration(client=client).get_claims_search()
+        url = client.get.call_args[0][0]
+        assert url.endswith("/post-purchase/v1/claims/search")
+        params = client.get.call_args[1]["params"]
+        assert params["player_user_id"] == "123456789"
+        assert params["player_role"] == "respondent"
+
+
+class TestGetQuestionsSearchRaw:
+
+    def test_calls_questions_search_unanswered(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"questions": []})
+        MercadoLivreIntegration(client=client).get_questions_search()
+        url = client.get.call_args[0][0]
+        assert url.endswith("/questions/search")
+        params = client.get.call_args[1]["params"]
+        assert params["status"] == "UNANSWERED"
+
+
+class TestGetItemsDetailBatch:
+
+    def test_returns_bodies_for_200_entries(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        body = [
+            {"code": 200, "body": {"id": "MLB1", "title": "A"}},
+            {"code": 200, "body": {"id": "MLB2", "title": "B"}},
+        ]
+        client = _get_only_client(get_body=body)
+        result = MercadoLivreIntegration(client=client).get_items_detail_batch(["MLB1", "MLB2"])
+        assert result == [{"id": "MLB1", "title": "A"}, {"id": "MLB2", "title": "B"}]
+
+    def test_skips_non_200_entries(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        body = [
+            {"code": 200, "body": {"id": "MLB1"}},
+            {"code": 404, "body": {"error": "not_found"}},
+        ]
+        client = _get_only_client(get_body=body)
+        result = MercadoLivreIntegration(client=client).get_items_detail_batch(["MLB1", "MLB2"])
+        assert result == [{"id": "MLB1"}]
+
+    def test_chunks_requests_at_20_ids(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body=[])
+        ids = [f"MLB{i}" for i in range(45)]
+        MercadoLivreIntegration(client=client).get_items_detail_batch(ids)
+        assert client.get.call_count == 3  # 20 + 20 + 5
+
+    def test_passes_attributes_param(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body=[])
+        MercadoLivreIntegration(client=client).get_items_detail_batch(["MLB1"], attributes="id,title")
+        params = client.get.call_args[1]["params"]
+        assert params["attributes"] == "id,title"
+        assert params["ids"] == "MLB1"
+
+    def test_returns_empty_list_when_no_ids(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body=[])
+        result = MercadoLivreIntegration(client=client).get_items_detail_batch([])
+        assert result == []
+        client.get.assert_not_called()
+
+
+class TestGetOrdersSearchRaw:
+
+    def test_calls_orders_search_with_seller_and_date_filter(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"results": []})
+        MercadoLivreIntegration(client=client).get_orders_search_raw()
+        url = client.get.call_args[0][0]
+        assert url.endswith("/orders/search")
+        params = client.get.call_args[1]["params"]
+        assert params["seller"] == "123456789"
+        assert "date_created.from" in params
+
+
+class TestGetItemsSearchRaw:
+
+    def test_calls_users_items_search(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"results": []})
+        MercadoLivreIntegration(client=client).get_items_search_raw()
+        url = client.get.call_args[0][0]
+        assert url.endswith("/users/123456789/items/search")
+
+
+class TestGetItemVisitsTimeWindow:
+
+    def test_calls_visits_time_window_for_item(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"total_visits": 10, "results": []})
+        MercadoLivreIntegration(client=client).get_item_visits_time_window("MLB1", days=30)
+        url = client.get.call_args[0][0]
+        assert url.endswith("/items/MLB1/visits/time_window")
+        params = client.get.call_args[1]["params"]
+        assert params["last"] == 30
+        assert params["unit"] == "day"
+
+
+class TestGetAdCampaigns:
+
+    def test_calls_product_ads_campaigns_search_with_api_version_header(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"results": []})
+        MercadoLivreIntegration(client=client).get_ad_campaigns()
+        url = client.get.call_args[0][0]
+        assert "/advertising/advertisers/123456789/product_ads/campaigns/search" in url
+        headers = client.get.call_args[1]["headers"]
+        assert headers["Api-Version"] == "1"
