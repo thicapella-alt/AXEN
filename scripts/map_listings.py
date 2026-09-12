@@ -17,7 +17,7 @@ Dois modos de saída, controlados por flag:
 
   --write-db
            Além de imprimir, GRAVA direto no banco (tabelas `products` e
-           `product_listings`, migração v3): gera um sku_axen sugerido a
+           `product_listings`, migração v4): gera um sku_axen sugerido a
            partir do título do anúncio (ex. "Axen Forge Cinza 21 Cm" →
            "FORGE-21-CIN") e das variation_attributes (SIZE/COLOR), cria a
            linha em `products` se ainda não existir, e grava/atualiza a
@@ -217,13 +217,14 @@ def load_from_fixtures() -> list[dict]:
     return []
 
 
-def write_to_db(items: list[dict], db_path: str) -> dict:
+def write_to_db(items: list[dict], db_path: str, brand: str = "AXEN") -> dict:
     """
-    Grava products + product_listings no banco (migração v3).
+    Grava products + product_listings no banco (migração v4).
 
     Idempotente: sku_axen de um listing já existente nunca é sobrescrito
     (só title/variation_label/status/imported_at são atualizados);
-    products só recebe INSERT quando o sku_axen ainda não existe.
+    products só recebe INSERT quando o sku_axen ainda não existe — `brand`
+    só é gravado na criação, não é atualizado em produtos já cadastrados.
     """
     from axen_database import get_connection, migrate
 
@@ -270,10 +271,10 @@ def write_to_db(items: list[dict], db_path: str) -> dict:
 
                 conn.execute(
                     """INSERT INTO products
-                       (sku_axen, model, size, color, active, notes, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, 1, 'SKU sugerido automaticamente por scripts/map_listings.py — revisar', ?, ?)
+                       (sku_axen, brand, model, size, color, active, notes, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 1, 'SKU sugerido automaticamente por scripts/map_listings.py — revisar', ?, ?)
                        ON CONFLICT(sku_axen) DO NOTHING""",
-                    (sku, _extract_model(title), _extract_attr(v, "SIZE"), _extract_attr(v, "COLOR"), now, now),
+                    (sku, brand, _extract_model(title), _extract_attr(v, "SIZE"), _extract_attr(v, "COLOR"), now, now),
                 )
                 if conn.execute("SELECT changes()").fetchone()[0]:
                     products_created += 1
@@ -310,7 +311,12 @@ def main() -> int:
     parser.add_argument(
         "--write-db",
         action="store_true",
-        help="além de imprimir, grava products + product_listings no banco (migração v3)",
+        help="além de imprimir, grava products + product_listings no banco (migração v4)",
+    )
+    parser.add_argument(
+        "--brand",
+        default="AXEN",
+        help="marca gravada em products.brand para produtos novos (default: AXEN)",
     )
     args = parser.parse_args()
 
@@ -327,7 +333,7 @@ def main() -> int:
 
     if args.write_db:
         db_path = os.getenv("DB_PATH", "axen.db")
-        summary = write_to_db(items, db_path)
+        summary = write_to_db(items, db_path, brand=args.brand)
         print(
             f"# Banco ({db_path}): {summary['products_created']} produto(s) novo(s), "
             f"{summary['listings_new']} anúncio(s) mapeado(s) pela 1ª vez, "
