@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 #  CONSTANTS
 # ─────────────────────────────────────────────
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 DEFAULT_DB_PATH = "axen_intelligence.db"
 
 
@@ -88,6 +88,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         _migrate_v2(conn)
     if current < 3:
         _migrate_v3(conn)
+    if current < 4:
+        _migrate_v4(conn)
 
     log.info("[DB] Schema up to date (v%d).", _SCHEMA_VERSION)
 
@@ -379,6 +381,30 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
             PRAGMA user_version = 3;
         """)
     log.info("[DB] Migration v3 applied.")
+
+
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    """
+    Version 4 — adiciona products.brand.
+
+    A v3 já estava aplicada em produção (products/product_listings sem
+    dado real ainda) quando o Thiago pediu esse campo, pensando em
+    cadastro único quando a AXEN tiver mais de uma marca — daí ser uma
+    migração separada em vez de editar a v3. Default 'AXEN' cobre tanto
+    linhas futuras quanto qualquer uma já existente (ALTER TABLE ADD
+    COLUMN com DEFAULT preenche as existentes retroativamente).
+    """
+    log.info("[DB] Applying migration v4 — adding products.brand.")
+    with conn:
+        conn.executescript("""
+            ALTER TABLE products ADD COLUMN brand TEXT NOT NULL DEFAULT 'AXEN';
+
+            CREATE INDEX IF NOT EXISTS idx_products_brand
+                ON products (brand);
+
+            PRAGMA user_version = 4;
+        """)
+    log.info("[DB] Migration v4 applied.")
 
 
 # ─────────────────────────────────────────────

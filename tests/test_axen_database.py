@@ -231,6 +231,61 @@ class TestMigrateV3:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  MIGRATION V4 TESTS — products.brand
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMigrateV4:
+    def test_brand_index_created(self, db):
+        indices = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "idx_products_brand" in indices
+
+    def test_brand_defaults_to_axen(self, db):
+        """A product inserted without specifying brand defaults to 'AXEN'."""
+        db.execute(
+            "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+            "VALUES ('SHACKLE-185-PTO', 'Shackle', 't', 't')"
+        )
+        row = db.execute("SELECT brand FROM products WHERE sku_axen='SHACKLE-185-PTO'").fetchone()
+        assert row["brand"] == "AXEN"
+
+    def test_brand_can_be_set_explicitly(self, db):
+        """Preparing for multi-brand: brand can be any value, not just AXEN."""
+        db.execute(
+            "INSERT INTO products (sku_axen, brand, model, created_at, updated_at) "
+            "VALUES ('OTHER-1', 'OutraMarca', 'Modelo', 't', 't')"
+        )
+        row = db.execute("SELECT brand FROM products WHERE sku_axen='OTHER-1'").fetchone()
+        assert row["brand"] == "OutraMarca"
+
+    def test_migrate_from_v3_backfills_brand_on_existing_rows(self):
+        """A DB already at v3 (with rows, pre-brand) gets brand='AXEN' backfilled on upgrade to v4."""
+        conn = get_connection(":memory:")
+        migrate(conn)  # runs v1..v4 fresh — simulate an existing v3 row first instead:
+        conn.close()
+
+        # Rebuild starting from a hand-rolled v3-only state to prove the backfill path.
+        conn = get_connection(":memory:")
+        db_module._migrate_v1(conn)
+        db_module._migrate_v2(conn)
+        db_module._migrate_v3(conn)
+        conn.execute(
+            "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+            "VALUES ('PRE-V4-SKU', 'Modelo', 't', 't')"
+        )
+        conn.commit()
+
+        migrate(conn)  # now applies v4 on top of existing data
+
+        row = conn.execute("SELECT brand FROM products WHERE sku_axen='PRE-V4-SKU'").fetchone()
+        assert row["brand"] == "AXEN"
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  INGEST_SCRAPE_RUN TESTS
 # ═══════════════════════════════════════════════════════════════════════════
 
