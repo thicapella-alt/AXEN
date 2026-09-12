@@ -102,3 +102,15 @@ class TestSizeDecimalHandling:
         t_dot = "Pulseira Axen Modelo Preto 19.5 Cm"
         t_comma = "Pulseira Axen Modelo Preto 19,5 Cm"
         assert suggest_sku(t_dot, {}) == suggest_sku(t_comma, {})
+
+
+class TestSizeValueWithEmbeddedUnit:
+    """Comprimento/Diâmetro vêm do ML com a unidade embutida ('20.5 cm'),
+    diferente de Tamanho ('19' puro) — achado na 1ª rodada real em produção:
+    sem limpar, o sku saía 'DRIFT-205C-PTO' (a unidade cortada no meio)."""
+
+    def test_comprimento_value_with_unit_does_not_leak_into_sku(self):
+        v = _variation({"comprimento": "20.5 cm", "cor": "Preto"})
+        sku = suggest_sku("Pulseira Axen Anchor", v)
+        assert sku == "ANCHOR-205-PTO"
+        assert "C-" not in sku and not sku.endswith("C")
