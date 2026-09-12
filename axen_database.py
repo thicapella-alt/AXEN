@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 #  CONSTANTS
 # ─────────────────────────────────────────────
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 DEFAULT_DB_PATH = "axen_intelligence.db"
 
 
@@ -86,6 +86,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         _migrate_v1(conn)
     if current < 2:
         _migrate_v2(conn)
+    if current < 3:
+        _migrate_v3(conn)
 
     log.info("[DB] Schema up to date (v%d).", _SCHEMA_VERSION)
 
@@ -293,6 +295,90 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
             PRAGMA user_version = 2;
         """)
     log.info("[DB] Migration v2 applied.")
+
+
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    """
+    Version 3 — cadastro mestre de produto (products) + mapeamento de
+    anúncios por plataforma (product_listings).
+
+    Schema revisado contra escopo-automacao-axen-2026-09-07.md v1.3 §5 +
+    feedback do Thiago em 12/09/2026 — ver histórico do PR para o
+    detalhamento. Resumo:
+      - products.sku_axen é a PRIMARY KEY (chave natural, ex. 'DRIFT-185-AZE')
+        — cada VARIAÇÃO (modelo+tamanho+cor) tem seu próprio sku_axen, não
+        cada modelo comercial.
+      - product_listings mapeia (platform, item_id, variation_id) → sku_axen
+        — o "De/Para" entre cada anúncio de cada plataforma (ML hoje;
+        Nuvemshop na Fase 1.5; outras no futuro, sem mudança de schema) e o
+        cadastro mestre. sku_axen fica NULL até ser mapeado — o coletor de
+        vendas nunca adivinha (D10 do escopo).
+    """
+    log.info("[DB] Applying migration v3 — creating products + product_listings tables.")
+    with conn:
+        conn.executescript("""
+            -- ── products ───────────────────────────────────────────────────────
+            -- Cadastro mestre AXEN. sku_axen é a chave natural (ex. 'DRIFT-185-AZE'),
+            -- definida pelo Thiago. Campos conforme escopo §5 + adicionais pedidos.
+            CREATE TABLE IF NOT EXISTS products (
+                sku_axen                    TEXT    PRIMARY KEY,        -- chave AXEN, ex. 'DRIFT-185-AZE'
+                model                       TEXT    NOT NULL,           -- modelo comercial (Drift, Clip, Anchor…)
+                ali_name                    TEXT,                       -- nome/título do produto no fornecedor
+                category                    TEXT,                       -- categoria (ex. 'pulseira', 'colar')
+                size                        TEXT,                       -- tamanho (ex. '18cm', '21cm')
+                color                       TEXT,
+                material                    TEXT,
+                supplier                    TEXT,                       -- fornecedor (ex. 'AliExpress', nome da loja)
+                barcode                     TEXT,                       -- código de barras / EAN
+                cost_price                  REAL,                       -- custo unitário atual (R$)
+                sale_price                  REAL,                       -- preço de venda de referência (R$)
+                lead_time_purchase_days     INTEGER,                    -- compra/fornecedor (padrão 20)
+                lead_time_processing_days   INTEGER,                    -- acabamento/gravação a laser (padrão 5)
+                lead_time_fulfillment_days  INTEGER,                    -- envio ao Full (padrão 3)
+                target_coverage_days        INTEGER,                    -- cobertura alvo em dias (padrão 45 — usado no ROP, §8.2)
+                active                      INTEGER NOT NULL DEFAULT 1, -- 0/1
+                notes                       TEXT,
+                created_at                  TEXT    NOT NULL,
+                updated_at                  TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_products_model
+                ON products (model);
+            CREATE INDEX IF NOT EXISTS idx_products_active
+                ON products (active);
+            CREATE INDEX IF NOT EXISTS idx_products_barcode
+                ON products (barcode);
+
+            -- ── product_listings ──────────────────────────────────────────────
+            -- Mapeamento anúncio (ou variação de anúncio) ↔ produto mestre.
+            -- Gerada/atualizada por scripts/map_listings.py + import manual do
+            -- sku_axen confirmado/ajustado pelo Thiago na planilha.
+            CREATE TABLE IF NOT EXISTS product_listings (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku_axen        TEXT    REFERENCES products(sku_axen),  -- NULL até mapear
+                platform        TEXT    NOT NULL,          -- 'mercadolivre' | 'nuvemshop' | ...
+                item_id         TEXT    NOT NULL,           -- 'MLB123456789' ou id da outra plataforma
+                variation_id    TEXT    NOT NULL DEFAULT '',-- '' quando o anúncio não tem variação
+                title           TEXT    NOT NULL DEFAULT '',      -- snapshot do título do anúncio
+                variation_label TEXT    NOT NULL DEFAULT '',      -- snapshot do texto da variação (ex. "Cor: Preto")
+                status          TEXT,                       -- status do anúncio na plataforma (active/paused/closed…)
+                inventory_id    TEXT,                       -- inventory_id Full/Fulfillment, se houver
+                imported_at     TEXT    NOT NULL,            -- quando este snapshot foi gerado
+                created_at      TEXT    NOT NULL,
+                updated_at      TEXT    NOT NULL,
+                UNIQUE (platform, item_id, variation_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_product_listings_sku_axen
+                ON product_listings (sku_axen);
+            CREATE INDEX IF NOT EXISTS idx_product_listings_platform_item
+                ON product_listings (platform, item_id);
+            CREATE INDEX IF NOT EXISTS idx_product_listings_status
+                ON product_listings (status);
+
+            PRAGMA user_version = 3;
+        """)
+    log.info("[DB] Migration v3 applied.")
 
 
 # ─────────────────────────────────────────────
