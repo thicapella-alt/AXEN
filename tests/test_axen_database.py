@@ -70,6 +70,7 @@ class TestMigrate:
             "scrape_runs", "prices", "price_changes",
             "delivery_snapshots", "ml_positions",
             "sales", "roas_campaigns", "agent_recommendations",
+            "visits", "products", "product_listings",
         }
         assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
@@ -109,6 +110,124 @@ class TestMigrate:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         assert version == 0
         conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MIGRATION V3 TESTS — products + product_listings
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMigrateV3:
+    def test_v3_indices_created(self, db):
+        """Indices for products/product_listings must exist after migration."""
+        indices = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_products_model",
+            "idx_products_active",
+            "idx_products_barcode",
+            "idx_product_listings_sku_axen",
+            "idx_product_listings_platform_item",
+            "idx_product_listings_status",
+        }
+        assert required.issubset(indices), f"Missing indices: {required - indices}"
+
+    def test_products_sku_axen_is_primary_key(self, db):
+        """sku_axen is the natural primary key of products — duplicate insert must fail."""
+        db.execute(
+            "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+            "VALUES ('SHACKLE-185-PTO', 'Shackle', 't', 't')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+                "VALUES ('SHACKLE-185-PTO', 'Shackle', 't', 't')"
+            )
+
+    def test_products_all_columns_round_trip(self, db):
+        """Every column from the §5-aligned schema can be written and read back."""
+        db.execute(
+            """
+            INSERT INTO products (
+                sku_axen, model, ali_name, category, size, color, material,
+                supplier, barcode, cost_price, sale_price,
+                lead_time_purchase_days, lead_time_processing_days,
+                lead_time_fulfillment_days, target_coverage_days,
+                active, notes, created_at, updated_at
+            ) VALUES (
+                'DRIFT-185-AZE', 'Drift', 'Bracelet Anchor Blue', 'pulseira',
+                '18,5cm', 'Azul Escuro', 'Aço Inox', 'AliExpress', '789123456',
+                12.5, 49.9, 20, 5, 3, 45, 1, 'obs', 't', 't'
+            )
+            """
+        )
+        row = db.execute("SELECT * FROM products WHERE sku_axen='DRIFT-185-AZE'").fetchone()
+        assert row["model"] == "Drift"
+        assert row["category"] == "pulseira"
+        assert row["cost_price"] == 12.5
+        assert row["sale_price"] == 49.9
+        assert row["lead_time_purchase_days"] == 20
+        assert row["target_coverage_days"] == 45
+        assert row["active"] == 1
+
+    def test_product_listings_unique_platform_item_variation(self, db):
+        """(platform, item_id, variation_id) must be unique."""
+        db.execute(
+            "INSERT INTO product_listings (platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            "VALUES ('mercadolivre', 'MLB1', 'V1', 't', 't', 't')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "INSERT INTO product_listings (platform, item_id, variation_id, imported_at, created_at, updated_at) "
+                "VALUES ('mercadolivre', 'MLB1', 'V1', 't', 't', 't')"
+            )
+
+    def test_product_listings_sku_axen_nullable_until_mapped(self, db):
+        """A listing can exist with sku_axen=NULL (unmapped) — coletor nunca adivinha."""
+        db.execute(
+            "INSERT INTO product_listings (platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            "VALUES ('mercadolivre', 'MLB2', '', 't', 't', 't')"
+        )
+        row = db.execute("SELECT sku_axen FROM product_listings WHERE item_id='MLB2'").fetchone()
+        assert row["sku_axen"] is None
+
+    def test_product_listings_links_to_products_by_sku_axen(self, db):
+        """product_listings.sku_axen references products.sku_axen (not a surrogate id)."""
+        db.execute(
+            "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+            "VALUES ('SHACKLE-185-PTO', 'Shackle', 't', 't')"
+        )
+        db.execute(
+            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            "VALUES ('SHACKLE-185-PTO', 'mercadolivre', 'MLB3', 'V3', 't', 't', 't')"
+        )
+        row = db.execute(
+            """
+            SELECT p.model FROM product_listings pl
+            JOIN products p ON p.sku_axen = pl.sku_axen
+            WHERE pl.item_id = 'MLB3'
+            """
+        ).fetchone()
+        assert row["model"] == "Shackle"
+
+    def test_product_listings_multiple_platforms_same_sku(self, db):
+        """The same sku_axen can be mapped from multiple platforms (De/Para)."""
+        db.execute(
+            "INSERT INTO products (sku_axen, model, created_at, updated_at) "
+            "VALUES ('SHACKLE-185-PTO', 'Shackle', 't', 't')"
+        )
+        for platform, item_id in [("mercadolivre", "MLB4"), ("nuvemshop", "NS-99")]:
+            db.execute(
+                "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+                "VALUES ('SHACKLE-185-PTO', ?, ?, '', 't', 't', 't')",
+                (platform, item_id),
+            )
+        count = db.execute(
+            "SELECT COUNT(*) FROM product_listings WHERE sku_axen='SHACKLE-185-PTO'"
+        ).fetchone()[0]
+        assert count == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════
