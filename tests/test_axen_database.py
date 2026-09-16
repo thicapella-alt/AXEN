@@ -484,6 +484,125 @@ class TestMigrateV5:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  MIGRATION V6 TESTS — orders + order_items (S2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMigrateV6:
+    def test_v6_indices_created(self, db):
+        indices = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_orders_status", "idx_orders_date",
+            "idx_order_items_sku", "idx_order_items_order",
+        }
+        assert required.issubset(indices), f"Missing indices: {required - indices}"
+
+    def _insert_order(self, db, **overrides):
+        row = {
+            "order_id": "2000018415699106",
+            "date_created": "2026-09-11T20:19:02.000-04:00",
+            "status": "paid",
+            "canal": "marketplace",
+            "tags": '["order_has_discount", "paid", "not_delivered"]',
+            "shipment_id": "47994433273",
+            "tipo_envio": "full",
+            "receita_bruta": 155.0,
+            "tarifa_ml": 23.25,
+            "custo_frete": 20.45,
+            "descontos": 60.0,
+            "cancelado": 0,
+            "reembolsado": 0,
+            "receita_liquida": 111.3,
+            "raw_json": "{}",
+            "ingested_at": "t",
+            "updated_at": "t",
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO orders (
+                order_id, date_created, status, canal, tags, shipment_id, tipo_envio,
+                receita_bruta, tarifa_ml, custo_frete, descontos, cancelado, reembolsado,
+                receita_liquida, raw_json, ingested_at, updated_at
+            ) VALUES (:order_id, :date_created, :status, :canal, :tags, :shipment_id, :tipo_envio,
+                      :receita_bruta, :tarifa_ml, :custo_frete, :descontos, :cancelado, :reembolsado,
+                      :receita_liquida, :raw_json, :ingested_at, :updated_at)
+            """,
+            row,
+        )
+
+    def test_order_round_trip(self, db):
+        self._insert_order(db)
+        row = db.execute("SELECT * FROM orders WHERE order_id='2000018415699106'").fetchone()
+        assert row["status"] == "paid"
+        assert row["tipo_envio"] == "full"
+        assert row["tarifa_ml"] == 23.25
+        assert row["receita_liquida"] == 111.3
+
+    def test_order_id_is_primary_key(self, db):
+        self._insert_order(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_order(db)
+
+    def _insert_item(self, db, **overrides):
+        row = {
+            "order_id": "2000018415699106",
+            "item_id": "MLB7318432106",
+            "variation_id": "",
+            "sku_axen": None,
+            "quantidade": 1,
+            "preco_unitario": 155.0,
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO order_items (order_id, item_id, variation_id, sku_axen, quantidade, preco_unitario)
+            VALUES (:order_id, :item_id, :variation_id, :sku_axen, :quantidade, :preco_unitario)
+            """,
+            row,
+        )
+
+    def test_item_requires_known_order(self, db):
+        """order_id must exist in orders — FK enforced."""
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_item(db)
+
+    def test_item_round_trip_with_null_sku_axen(self, db):
+        """sku_axen fica NULL quando product_listings não tem mapeamento — coletor nunca adivinha."""
+        self._insert_order(db)
+        self._insert_item(db)
+        row = db.execute("SELECT * FROM order_items WHERE item_id='MLB7318432106'").fetchone()
+        assert row["sku_axen"] is None
+        assert row["variation_id"] == ""  # null vira '' — mesmo padrão de product_listings
+
+    def test_item_resolves_sku_axen_when_mapped(self, db):
+        _insert_product(db, sku_axen="FORGE-19-CIN", model="Forge")
+        self._insert_order(db)
+        self._insert_item(db, sku_axen="FORGE-19-CIN")
+        row = db.execute("SELECT sku_axen FROM order_items WHERE item_id='MLB7318432106'").fetchone()
+        assert row["sku_axen"] == "FORGE-19-CIN"
+
+    def test_item_unique_per_order_item_variation(self, db):
+        self._insert_order(db)
+        self._insert_item(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_item(db)
+
+    def test_item_same_item_id_different_variation_allowed(self, db):
+        """Um pedido com 2 unidades de variações diferentes do mesmo anúncio."""
+        self._insert_order(db)
+        self._insert_item(db, variation_id="")
+        self._insert_item(db, variation_id="V2")
+        count = db.execute(
+            "SELECT COUNT(*) FROM order_items WHERE order_id='2000018415699106'"
+        ).fetchone()[0]
+        assert count == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  INGEST_SCRAPE_RUN TESTS
 # ═══════════════════════════════════════════════════════════════════════════
 

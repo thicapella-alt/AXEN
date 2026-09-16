@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 #  CONSTANTS
 # ─────────────────────────────────────────────
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 DEFAULT_DB_PATH = "axen_intelligence.db"
 
 
@@ -92,6 +92,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         _migrate_v4(conn)
     if current < 5:
         _migrate_v5(conn)
+    if current < 6:
+        _migrate_v6(conn)
 
     log.info("[DB] Schema up to date (v%d).", _SCHEMA_VERSION)
 
@@ -503,6 +505,86 @@ def _migrate_v5(conn: sqlite3.Connection) -> None:
             PRAGMA user_version = 5;
         """)
     log.info("[DB] Migration v5 applied.")
+
+
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    """
+    Version 6 — coletor de pedidos: orders + order_items (S2 §2).
+
+    Schema mostrado e aprovado pelo Thiago em 17/09/2026, validado contra
+    o fixture real do spike (tests/fixtures/ml/order_detail.redacted.json).
+    Decisões-chave:
+
+      - order_id/item_id/shipment_id como TEXT (mesmo padrão de
+        product_listings.item_id) — evita qualquer risco de precisão
+        numérica com os IDs de 16 dígitos do ML.
+      - order_items.variation_id NOT NULL DEFAULT '' — o fixture real
+        mostra order_items[].item.variation_id vindo `null` mesmo quando
+        o item tem variação (os atributos vêm embutidos em
+        variation_attributes, mas o id formal não). '' bate com o mesmo
+        padrão já usado em product_listings.variation_id, senão a
+        resolução via (item_id, variation_id) nunca bateria.
+      - order_items.sku_axen fica NULL quando product_listings não tem
+        mapeamento — o coletor nunca adivinha (mesmo princípio de D10 do
+        escopo, já usado em product_listings).
+      - orders.tarifa_ml é a SOMA de order_items[].sale_fee — no ML essa
+        tarifa vem por item, não um campo único no pedido.
+      - orders.descontos é a soma de (gross_price - unit_price) por
+        item — informativo; NÃO é subtraído de novo de receita_bruta
+        porque total_amount já reflete o preço com desconto aplicado.
+      - orders.raw_json guarda o snapshot bruto do order_detail — permite
+        reprocessar (ex. recalcular receita_liquida com uma fórmula
+        diferente) sem nova chamada de API.
+    """
+    log.info("[DB] Applying migration v6 — creating orders + order_items tables.")
+    with conn:
+        conn.executescript("""
+            -- ── orders ────────────────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id         TEXT    PRIMARY KEY,
+                date_created     TEXT    NOT NULL,
+                status           TEXT    NOT NULL,
+                canal            TEXT    NOT NULL DEFAULT '',
+                tags             TEXT    NOT NULL DEFAULT '[]',
+                shipment_id      TEXT,
+                tipo_envio       TEXT,
+                receita_bruta    REAL    NOT NULL DEFAULT 0,
+                tarifa_ml        REAL    NOT NULL DEFAULT 0,
+                custo_frete      REAL,
+                descontos        REAL    NOT NULL DEFAULT 0,
+                cancelado        INTEGER NOT NULL DEFAULT 0,
+                reembolsado      INTEGER NOT NULL DEFAULT 0,
+                receita_liquida  REAL,
+                raw_json         TEXT,
+                ingested_at      TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_orders_status
+                ON orders (status);
+            CREATE INDEX IF NOT EXISTS idx_orders_date
+                ON orders (date_created);
+
+            -- ── order_items ──────────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS order_items (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id       TEXT    NOT NULL REFERENCES orders(order_id),
+                item_id        TEXT    NOT NULL,
+                variation_id   TEXT    NOT NULL DEFAULT '',
+                sku_axen       TEXT    REFERENCES products(sku_axen),
+                quantidade     INTEGER NOT NULL,
+                preco_unitario REAL    NOT NULL,
+                UNIQUE (order_id, item_id, variation_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_order_items_sku
+                ON order_items (sku_axen);
+            CREATE INDEX IF NOT EXISTS idx_order_items_order
+                ON order_items (order_id);
+
+            PRAGMA user_version = 6;
+        """)
+    log.info("[DB] Migration v6 applied.")
 
 
 # ─────────────────────────────────────────────
