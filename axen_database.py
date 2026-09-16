@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 #  CONSTANTS
 # ─────────────────────────────────────────────
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 DEFAULT_DB_PATH = "axen_intelligence.db"
 
 
@@ -90,6 +90,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         _migrate_v3(conn)
     if current < 4:
         _migrate_v4(conn)
+    if current < 5:
+        _migrate_v5(conn)
 
     log.info("[DB] Schema up to date (v%d).", _SCHEMA_VERSION)
 
@@ -405,6 +407,102 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
             PRAGMA user_version = 4;
         """)
     log.info("[DB] Migration v4 applied.")
+
+
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """
+    Version 5 — ledger de estoque: stock_movements + stock_snapshots (S2 §1).
+
+    Schema validado com o Thiago em 16-17/09/2026 (ver histórico do PR) —
+    vocabulário idêntico ao documentado em docs/movimentos-contagem-sheets.md
+    (Fase 0, item 0.5). Decisões-chave:
+
+      - stock_movements.quantidade é SEMPRE positiva — a direção nasce de
+        local_origem/local_destino, não de um sinal. Saldo por local:
+            SUM(quantidade WHERE local_destino=local)
+          - SUM(quantidade WHERE local_origem=local)
+        Isso evita ter que "lembrar" qual tipo é positivo/negativo na hora
+        de gravar — um único INSERT nunca precisa saber o saldo de nenhum
+        local pra estar correto.
+
+      - ajuste_contagem gerado automaticamente (job de persistência da
+        aba Contagem) sempre tem um local REAL de um lado e 'ajuste'
+        (conta virtual) do outro — nunca os dois virtuais. Ver a nota
+        "Correção pós-S2" em docs/movimentos-contagem-sheets.md.
+
+      - dedupe_key é a chave de idempotência: pra linhas vindas de
+        planilha, é derivada da referência da linha (spreadsheet_id +
+        aba + número da linha) — reexecutar o job de persistência não
+        duplica. Pra linhas vindas da API (venda_ml), é derivada de
+        (order_id, item_id, variation_id).
+
+      - stock_snapshots.local só tem 'full'/'proprio' (não os 8 locais
+        do ledger) — são os dois únicos "olhares" de estoque que o ML
+        expõe. 'proprio' aqui é só estoque_pronto (não soma com
+        estoque_bruto/laser — esses nunca aparecem como disponíveis pro
+        ML, somar geraria divergência falsa permanente).
+    """
+    log.info("[DB] Applying migration v5 — creating stock_movements + stock_snapshots tables.")
+    with conn:
+        conn.executescript("""
+            -- ── stock_movements ───────────────────────────────────────────────
+            -- Ledger de estoque. Uma linha = um evento (venda, compra, ajuste…).
+            -- Nunca editado depois de gravado — correções são novos movimentos.
+            CREATE TABLE IF NOT EXISTS stock_movements (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                data            TEXT    NOT NULL,           -- data do movimento (planilha ou API), ISO
+                sku_axen        TEXT    NOT NULL REFERENCES products(sku_axen),
+                tipo            TEXT    NOT NULL CHECK (tipo IN (
+                                    'compra_recebida', 'para_laser', 'de_laser', 'envio_full',
+                                    'recebido_full', 'venda_ml', 'devolucao', 'ajuste_contagem',
+                                    'brinde', 'perda'
+                                )),
+                quantidade      INTEGER NOT NULL CHECK (quantidade > 0),  -- sempre positiva, ver docstring
+                local_origem    TEXT    NOT NULL CHECK (local_origem IN (
+                                    'fornecedor', 'estoque_bruto', 'laser', 'estoque_pronto',
+                                    'full', 'cliente', 'perda', 'ajuste'
+                                )),
+                local_destino   TEXT    NOT NULL CHECK (local_destino IN (
+                                    'fornecedor', 'estoque_bruto', 'laser', 'estoque_pronto',
+                                    'full', 'cliente', 'perda', 'ajuste'
+                                )),
+                referencia      TEXT    NOT NULL DEFAULT '',  -- order_id / pedido Ali / referência da linha da planilha
+                observacao      TEXT    NOT NULL DEFAULT '',
+                fonte           TEXT    NOT NULL CHECK (fonte IN ('api', 'planilha_movimentos', 'planilha_contagem')),
+                dedupe_key      TEXT    NOT NULL UNIQUE,      -- chave de idempotência, ver docstring
+                ingested_at     TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stock_movements_sku_data
+                ON stock_movements (sku_axen, data);
+            CREATE INDEX IF NOT EXISTS idx_stock_movements_tipo
+                ON stock_movements (tipo);
+            CREATE INDEX IF NOT EXISTS idx_stock_movements_fonte
+                ON stock_movements (fonte);
+
+            -- ── stock_snapshots ───────────────────────────────────────────────
+            -- Saldo calculado do ledger vs. saldo declarado pelo ML, por
+            -- execução do motor de reconciliação (S2 Parte 3, §7.2 do escopo).
+            CREATE TABLE IF NOT EXISTS stock_snapshots (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                data                TEXT    NOT NULL,        -- quando o cálculo rodou, ISO
+                sku_axen            TEXT    NOT NULL REFERENCES products(sku_axen),
+                local               TEXT    NOT NULL CHECK (local IN ('full', 'proprio')),
+                saldo_ledger        INTEGER NOT NULL,
+                saldo_declarado_ml  INTEGER,                  -- NULL se o SKU não tem listing mapeado
+                divergencia         INTEGER,                  -- saldo_declarado_ml - saldo_ledger
+                created_at          TEXT    NOT NULL,
+                UNIQUE (data, sku_axen, local)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stock_snapshots_sku
+                ON stock_snapshots (sku_axen);
+            CREATE INDEX IF NOT EXISTS idx_stock_snapshots_divergencia
+                ON stock_snapshots (divergencia);
+
+            PRAGMA user_version = 5;
+        """)
+    log.info("[DB] Migration v5 applied.")
 
 
 # ─────────────────────────────────────────────
