@@ -285,9 +285,9 @@ class TestNextRunTime:
         next_run = _next_run_time()
         assert next_run > datetime.now(BRT)
 
-    def test_result_is_at_07_00_00(self):
+    def test_result_is_at_one_of_the_scheduled_hours(self):
         next_run = _next_run_time()
-        assert next_run.hour == 7
+        assert next_run.hour in axen_scheduler.SCRAPE_HOURS
         assert next_run.minute == 0
         assert next_run.second == 0
         assert next_run.microsecond == 0
@@ -296,11 +296,46 @@ class TestNextRunTime:
         next_run = _next_run_time()
         assert next_run.tzinfo is not None
 
-    def test_result_is_within_24_hours(self):
+    def test_result_is_within_longest_gap(self):
+        """3x/dia (07/13/21 BRT) — o maior intervalo entre execuções é
+        21:00 -> 07:00 do dia seguinte, 10 h."""
         from datetime import datetime, timedelta
         next_run = _next_run_time()
         now = datetime.now(BRT)
-        assert next_run - now <= timedelta(hours=24)
+        assert next_run - now <= timedelta(hours=10)
+
+    def test_picks_soonest_remaining_hour_today(self, monkeypatch):
+        """Logo após as 07:00 BRT, a próxima execução deve ser 13:00 hoje,
+        não 07:00 de amanhã."""
+        from datetime import datetime
+
+        fixed_now = datetime(2026, 9, 20, 8, 0, tzinfo=BRT)
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+        monkeypatch.setattr(axen_scheduler, "datetime", _FixedDatetime)
+        next_run = _next_run_time()
+        assert next_run.hour == 13
+        assert next_run.day == 20
+
+    def test_rolls_over_to_tomorrow_after_last_hour(self, monkeypatch):
+        """Depois das 21:00 BRT, a próxima execução é 07:00 de amanhã."""
+        from datetime import datetime
+
+        fixed_now = datetime(2026, 9, 20, 22, 0, tzinfo=BRT)
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+        monkeypatch.setattr(axen_scheduler, "datetime", _FixedDatetime)
+        next_run = _next_run_time()
+        assert next_run.hour == 7
+        assert next_run.day == 21
 
 
 # ─────────────────────────────────────────────

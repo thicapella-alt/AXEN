@@ -1,5 +1,5 @@
 [Unit]
-Description=AXEN Intelligence — Scheduler (scraper diário 07:00 BRT)
+Description=AXEN Intelligence — Scheduler (scraper 3x/dia — 07:00/13:00/21:00 BRT)
 Documentation=https://github.com/SEU_USUARIO/axen-intelligence
 After=network.target axen-api.service
 Wants=network.target

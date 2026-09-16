@@ -1,9 +1,9 @@
 """
-axen_scheduler.py — Daily AXEN price intelligence pipeline runner.
+axen_scheduler.py — AXEN price intelligence pipeline runner.
 
 Modes
 ─────
-  python axen_scheduler.py              # daemon: fires at 07:00 BRT every day
+  python axen_scheduler.py              # daemon: fires at 07:00/13:00/21:00 BRT every day
   python axen_scheduler.py --run-now   # one-shot run, then exit
   python axen_scheduler.py --status    # show last run info + next scheduled time
 
@@ -57,7 +57,8 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = str(PROJECT_ROOT / "axen.db")
 LOG_KEEP = 30
-SCRAPE_HOUR = 7  # 07:00 BRT
+SCRAPE_HOURS = (7, 13, 21)  # 07:00 / 13:00 / 21:00 BRT — item 0.7 (Fase 0)
+_SCRAPE_HOURS_CRON = ",".join(str(h) for h in SCRAPE_HOURS)  # "7,13,21" for CronTrigger
 
 # ─────────────────────────────────────────────
 #  RE-ENTRANCY GUARD
@@ -218,12 +219,18 @@ def update_latest_link(data_dir: Path, dated_dir: Path) -> bool:
 
 
 def _next_run_time() -> datetime:
-    """Return the next wall-clock 07:00 BRT from the current moment."""
+    """Return the next wall-clock scheduled time (one of SCRAPE_HOURS, BRT)
+    from the current moment — today if an hour is still ahead, otherwise
+    the earliest hour tomorrow."""
     now = datetime.now(BRT)
-    candidate = now.replace(hour=SCRAPE_HOUR, minute=0, second=0, microsecond=0)
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
+    todays_candidates = [
+        now.replace(hour=h, minute=0, second=0, microsecond=0) for h in SCRAPE_HOURS
+    ]
+    upcoming_today = [c for c in todays_candidates if c > now]
+    if upcoming_today:
+        return min(upcoming_today)
+    tomorrow = now + timedelta(days=1)
+    return tomorrow.replace(hour=min(SCRAPE_HOURS), minute=0, second=0, microsecond=0)
 
 
 # ─────────────────────────────────────────────
@@ -433,13 +440,26 @@ def cmd_daemon() -> None:
     """
     Start the APScheduler daemon.
 
-    - Fires run_pipeline() every day at 07:00 BRT.
+    - Fires run_pipeline() 3x/day (07:00, 13:00, 21:00 BRT) via a single
+      CronTrigger with a comma-separated hour list — one daemon process,
+      one systemd service, one _PIPELINE_LOCK. This was chosen over three
+      separate systemd timers because _PIPELINE_LOCK (the re-entrancy
+      guard against overlapping runs) is an in-process threading.Lock: it
+      only protects against overlap when every run shares one process.
+      Three independent timer-launched one-shot processes would each get
+      their own lock and could run concurrently if one cycle overruns
+      into the next slot — exactly the failure mode the lock exists to
+      prevent. A single daemon with a richer cron expression avoids that
+      risk for free and keeps one log stream / one thing to restart.
     - Blocks until SIGINT or SIGTERM is received.
     - On shutdown, waits up to 60 s for an in-progress pipeline to finish
       before forcing exit.
     """
     log = setup_logging()
-    log.info("Daemon AXEN iniciado — pipeline diária às %02d:00 BRT.", SCRAPE_HOUR)
+    log.info(
+        "Daemon AXEN iniciado — pipeline 3x/dia às %s BRT.",
+        ", ".join(f"{h:02d}:00" for h in SCRAPE_HOURS),
+    )
 
     _stop_event = threading.Event()
 
@@ -458,9 +478,9 @@ def cmd_daemon() -> None:
         scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
         scheduler.add_job(
             _pipeline_task,
-            CronTrigger(hour=SCRAPE_HOUR, minute=0, timezone="America/Sao_Paulo"),
+            CronTrigger(hour=_SCRAPE_HOURS_CRON, minute=0, timezone="America/Sao_Paulo"),
             id="daily_scrape",
-            name="AXEN Daily Scrape",
+            name="AXEN Daily Scrape (3x/dia)",
             max_instances=1,
             coalesce=True,
             replace_existing=True,
