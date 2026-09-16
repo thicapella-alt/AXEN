@@ -84,6 +84,22 @@ ALLOWED_LOCATIONS = frozenset({
     "ajuste",
 })
 
+# Cabeçalhos esperados — em sincronia com docs/movimentos-contagem-sheets.md.
+# Passados como `expected_headers` pro gspread (ver _read_worksheet_records):
+# uma planilha editada à mão facilmente acumula colunas extras em branco à
+# direita do cabeçalho real (célula com formatação sem texto, por exemplo) —
+# sem isso, get_all_records() rejeita a leitura inteira com "header row
+# contains duplicates: ['']" mesmo quando as colunas que interessam estão
+# certas. Ver tests/integrations/test_axen_sheets.py::TestReadWithStrayColumns.
+MOVIMENTOS_HEADERS = [
+    "data", "sku_axen", "tipo", "quantidade",
+    "local_origem", "local_destino", "referencia", "observacao",
+]
+CONTAGEM_HEADERS = [
+    "data_contagem", "sku_axen", "local", "quantidade_contada",
+    "quantidade_sistema", "responsavel", "observacao",
+]
+
 
 class SheetsDisabledError(Exception):
     """Raised when AxenSheetsClient is used but GOOGLE_SHEETS_ENABLED is off."""
@@ -303,11 +319,16 @@ class AxenSheetsClient:
         self._client = gspread.service_account(filename=creds_path)
         return self._client
 
-    def _read_worksheet_records(self, spreadsheet_id: str, worksheet_name: str) -> list[dict]:
+    def _read_worksheet_records(
+        self,
+        spreadsheet_id: str,
+        worksheet_name: str,
+        expected_headers: Optional[list[str]] = None,
+    ) -> list[dict]:
         client = self._get_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(worksheet_name)
-        return worksheet.get_all_records()
+        return worksheet.get_all_records(expected_headers=expected_headers)
 
     def read_movimentos(
         self,
@@ -321,7 +342,7 @@ class AxenSheetsClient:
         A row that fails validation is skipped and reported in `errors`
         instead of aborting the whole read.
         """
-        raw_rows = self._read_worksheet_records(spreadsheet_id, worksheet_name)
+        raw_rows = self._read_worksheet_records(spreadsheet_id, worksheet_name, MOVIMENTOS_HEADERS)
         rows: list[MovimentoRow] = []
         errors: list[RowError] = []
         for i, raw in enumerate(raw_rows, start=1):
@@ -346,7 +367,7 @@ class AxenSheetsClient:
 
         Returns ReadResult(rows=[ContagemRow, ...], errors=[RowError, ...]).
         """
-        raw_rows = self._read_worksheet_records(spreadsheet_id, worksheet_name)
+        raw_rows = self._read_worksheet_records(spreadsheet_id, worksheet_name, CONTAGEM_HEADERS)
         rows: list[ContagemRow] = []
         errors: list[RowError] = []
         for i, raw in enumerate(raw_rows, start=1):
