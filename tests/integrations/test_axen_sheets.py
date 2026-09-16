@@ -32,10 +32,25 @@ from integrations.axen_sheets import (
 # ── Fakes ─────────────────────────────────────────────────────────────────────
 
 class _FakeWorksheet:
-    def __init__(self, records: list[dict]) -> None:
-        self._records = records
+    """
+    Mimics gspread.Worksheet.get_all_records() enough to test our
+    expected_headers usage — including the failure mode it exists to avoid:
+    a real worksheet with stray blank header columns raises when
+    expected_headers is omitted, and succeeds when it's passed (this is
+    gspread's actual, real behavior — see gspread/worksheet.py
+    get_all_records(); we don't import gspread here to keep these tests
+    independent of it being importable, see module docstring).
+    """
 
-    def get_all_records(self) -> list[dict]:
+    def __init__(self, records: list[dict], has_stray_blank_headers: bool = False) -> None:
+        self._records = records
+        self._has_stray_blank_headers = has_stray_blank_headers
+
+    def get_all_records(self, expected_headers: list[str] | None = None) -> list[dict]:
+        if self._has_stray_blank_headers and expected_headers is None:
+            raise Exception(
+                "the header row in the worksheet contains duplicates: ['']"
+            )
         return self._records
 
 
@@ -59,6 +74,11 @@ class _FakeClient:
 
 def _build_client(sheet_id: str, worksheet_name: str, records: list[dict]) -> _FakeClient:
     return _FakeClient({sheet_id: _FakeSpreadsheet({worksheet_name: _FakeWorksheet(records)})})
+
+
+def _build_client_with_stray_headers(sheet_id: str, worksheet_name: str, records: list[dict]) -> _FakeClient:
+    ws = _FakeWorksheet(records, has_stray_blank_headers=True)
+    return _FakeClient({sheet_id: _FakeSpreadsheet({worksheet_name: ws})})
 
 
 # ── Fixture rows ──────────────────────────────────────────────────────────────
@@ -294,3 +314,37 @@ class TestReadContagem:
         assert len(result.rows) == 1
         assert len(result.errors) == 1
         assert result.errors[0].row_number == 2
+
+
+class TestReadWithStrayColumns:
+    """
+    Reprodução do bug real encontrado em produção em 16/09/2026: a aba
+    Contagem, criada manualmente na planilha, tinha colunas em branco
+    extras à direita do cabeçalho real — gspread.get_all_records() rejeita
+    a leitura inteira com "header row ... contains duplicates: ['']"
+    quando isso acontece, a menos que `expected_headers` seja passado.
+    Sem o fix, mesmo linhas de dado válidas nunca eram lidas.
+    """
+
+    def test_read_movimentos_survives_stray_blank_header_columns(self):
+        fake = _build_client_with_stray_headers("sheet-id", "Movimentos", [_movimento_raw()])
+        client = AxenSheetsClient(client=fake)
+        result = client.read_movimentos("sheet-id")
+        assert len(result.rows) == 1
+        assert result.errors == []
+
+    def test_read_contagem_survives_stray_blank_header_columns(self):
+        fake = _build_client_with_stray_headers("sheet-id", "Contagem", [_contagem_raw()])
+        client = AxenSheetsClient(client=fake)
+        result = client.read_contagem("sheet-id")
+        assert len(result.rows) == 1
+        assert result.errors == []
+
+    def test_without_the_fix_stray_headers_would_raise(self):
+        """Sanity check do próprio fake: confirma que ele reproduz o erro
+        real do gspread quando expected_headers não é passado — prova que
+        os dois testes acima estão de fato exercitando o fix, não um fake
+        que sempre passa."""
+        ws = _FakeWorksheet([_contagem_raw()], has_stray_blank_headers=True)
+        with pytest.raises(Exception, match="duplicates"):
+            ws.get_all_records()
