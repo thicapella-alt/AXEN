@@ -543,15 +543,20 @@ class MercadoLivreIntegration(BaseIntegration):
 
     def get_item_detail(self, item_id: str) -> dict:
         """
-        GET /items/{id}?attributes=id,title,pictures,variations
+        GET /items/{id}?attributes=id,title,pictures,variations,available_quantity
 
         Requested with an explicit `attributes` filter (rather than the full
         item payload) so the response includes `pictures` and `variations` —
         both needed for the product-registration mapping (item 0.3).
+        `available_quantity` added for S2's reconciliation engine (item
+        0.7.3) — items WITH variations already return each variation's own
+        available_quantity regardless of this filter (confirmed in the Fase
+        0 spike fixture), but a simple item with no variations needs it
+        requested explicitly at the top level, or it comes back missing.
         """
         return self._get_authed(
             f"/items/{item_id}",
-            attributes="id,title,pictures,variations",
+            attributes="id,title,pictures,variations,available_quantity",
         )
 
     def get_inventory_stock(self, inventory_id: str) -> dict:

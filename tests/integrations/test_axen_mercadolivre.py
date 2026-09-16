@@ -660,7 +660,7 @@ class TestGetItemDetail:
         url = client.get.call_args[0][0]
         assert url.endswith("/items/MLB1")
         params = client.get.call_args[1]["params"]
-        assert params["attributes"] == "id,title,pictures,variations"
+        assert params["attributes"] == "id,title,pictures,variations,available_quantity"
 
 
 class TestGetInventoryStock:
