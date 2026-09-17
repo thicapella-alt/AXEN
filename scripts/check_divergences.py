@@ -87,8 +87,56 @@ def extract_available_quantity_from_item(item_detail: dict, variation_id: str) -
     return item_detail.get("available_quantity")
 
 
+def extract_inventory_id_from_item(item_detail: dict, variation_id: str) -> Optional[str]:
+    """
+    Lê o inventory_id (presença = anúncio usa Fulfillment) direto do
+    item_detail — nunca de product_listings.inventory_id, que pode estar
+    desatualizado ou nunca ter sido preenchido (achado real: rodando
+    esta reconciliação pela 1ª vez em produção em 17/09/2026, TODOS os
+    SKUs caíram em 'proprio' porque essa coluna nunca foi gravada por
+    nada, mesmo pra anúncios que usam Full de verdade — gerando
+    divergência contra o bucket errado do ledger). Resolver do
+    item_detail (buscado a cada execução) é auto-corretivo: nunca fica
+    desatualizado, mesmo que um anúncio troque de Full pra próprio.
+    """
+    if variation_id:
+        for v in item_detail.get("variations") or []:
+            if str(v.get("id")) == str(variation_id):
+                return v.get("inventory_id")
+        return None
+    return item_detail.get("inventory_id")
+
+
 def extract_available_quantity_from_inventory(inventory_stock: dict) -> Optional[int]:
     return inventory_stock.get("available_quantity")
+
+
+def resolve_bucket_and_saldo_ml(
+    ml_client, item_id: str, variation_id: str, on_partial_error=None,
+) -> tuple[str, Optional[int]]:
+    """
+    Determina o bucket ('full'/'proprio') E o saldo declarado pelo ML.
+    Sempre busca get_item_detail() primeiro e lê o inventory_id de dentro
+    dele (ver extract_inventory_id_from_item) — nunca de
+    product_listings.inventory_id.
+
+    Se get_item_detail() falhar, a exceção propaga (sem isso não dá nem
+    pra saber o bucket). Se achar inventory_id (Full), confirma o saldo
+    com get_inventory_stock() — uma falha SÓ nessa 2ª chamada não perde o
+    bucket já determinado: reporta via `on_partial_error` (se fornecido)
+    e retorna saldo_declarado_ml=None em vez de propagar.
+    """
+    item_detail = ml_client.get_item_detail(item_id)
+    inventory_id = extract_inventory_id_from_item(item_detail, variation_id)
+    if inventory_id:
+        try:
+            inventory_stock = ml_client.get_inventory_stock(inventory_id)
+            return "full", extract_available_quantity_from_inventory(inventory_stock)
+        except Exception as exc:  # noqa: BLE001
+            if on_partial_error:
+                on_partial_error(exc)
+            return "full", None
+    return "proprio", extract_available_quantity_from_item(item_detail, variation_id)
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -126,9 +174,14 @@ def ledger_saldo(conn: sqlite3.Connection, sku_axen: str, bucket: str) -> int:
 
 
 def listing_for_sku(conn: sqlite3.Connection, sku_axen: str) -> Optional[sqlite3.Row]:
-    """Um listing mercadolivre pra esse sku_axen (o primeiro, se houver mais de um)."""
+    """
+    Um listing mercadolivre pra esse sku_axen (o primeiro, se houver mais
+    de um) — só item_id/variation_id. O bucket (full/proprio) NÃO vem
+    daqui — vem de resolve_bucket_and_saldo_ml(), resolvido fresco a cada
+    execução (ver docstring de extract_inventory_id_from_item).
+    """
     return conn.execute(
-        "SELECT item_id, variation_id, inventory_id FROM product_listings "
+        "SELECT item_id, variation_id FROM product_listings "
         "WHERE sku_axen=? AND platform='mercadolivre' AND item_id IS NOT NULL "
         "ORDER BY updated_at DESC LIMIT 1",
         (sku_axen,),
@@ -166,22 +219,26 @@ def reconcile(conn: sqlite3.Connection, ml_client, days: int = 7, dry_run: bool 
 
         item_id = listing["item_id"]
         variation_id = listing["variation_id"] or ""
-        inventory_id = listing["inventory_id"]
-        bucket = "full" if inventory_id else "proprio"
 
-        saldo_ledger = ledger_saldo(conn, sku_axen, bucket)
-
+        bucket: Optional[str] = None
         saldo_ml: Optional[int] = None
         try:
-            if bucket == "full":
-                inventory_stock = ml_client.get_inventory_stock(inventory_id)
-                saldo_ml = extract_available_quantity_from_inventory(inventory_stock)
-            else:
-                item_detail = ml_client.get_item_detail(item_id)
-                saldo_ml = extract_available_quantity_from_item(item_detail, variation_id)
+            bucket, saldo_ml = resolve_bucket_and_saldo_ml(
+                ml_client, item_id, variation_id,
+                on_partial_error=lambda exc: summary.errors.append(
+                    f"{sku_axen}: bucket=full resolvido, mas falha ao consultar estoque Full ({exc})"
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — 1 SKU não pode derrubar o lote
             summary.errors.append(f"{sku_axen}: falha ao consultar ML ({exc})")
 
+        if bucket is None:
+            # Não deu pra determinar nem o bucket — sem isso não dá nem
+            # pra saber qual saldo do ledger comparar. Snapshot pulado
+            # (já registrado em summary.errors acima).
+            continue
+
+        saldo_ledger = ledger_saldo(conn, sku_axen, bucket)
         divergencia = (saldo_ml - saldo_ledger) if saldo_ml is not None else None
         snap = SkuSnapshot(
             sku_axen=sku_axen, local=bucket,

@@ -20,9 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.check_divergences import (
     extract_available_quantity_from_inventory,
     extract_available_quantity_from_item,
+    extract_inventory_id_from_item,
     ledger_saldo,
     listing_for_sku,
     reconcile,
+    resolve_bucket_and_saldo_ml,
     skus_with_recent_movement,
 )
 
@@ -30,8 +32,19 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ml"
 ITEM_DETAIL = json.loads((FIXTURES / "item_detail.json").read_text())
 INVENTORY_STOCK = json.loads((FIXTURES / "inventory_stock.json").read_text())
 
-VARIATION_ID = "203113107597"   # a mesma variação nos dois fixtures
+VARIATION_ID = "203113107597"   # a mesma variação nos dois fixtures — usa Full (tem inventory_id)
 INVENTORY_ID = "PJVF21758"
+
+# Uma variação sintética sem inventory_id — pra testar o caminho 'proprio'.
+# (nenhuma das 12 variações do fixture real deixa de ter inventory_id —
+# esse catálogo é 100% Full — então simulamos um anúncio que não é.)
+ITEM_DETAIL_PROPRIO = {
+    **ITEM_DETAIL,
+    "variations": [
+        {**v, "inventory_id": None} if str(v.get("id")) == VARIATION_ID else v
+        for v in ITEM_DETAIL["variations"]
+    ],
+}
 
 
 # ── extract_available_quantity_* ────────────────────────────────────────────────
@@ -52,6 +65,64 @@ class TestExtractAvailableQuantityFromItem:
 class TestExtractAvailableQuantityFromInventory:
     def test_against_real_fixture(self):
         assert extract_available_quantity_from_inventory(INVENTORY_STOCK) == 1
+
+
+class TestExtractInventoryIdFromItem:
+    """Achado real de produção (17/09/2026): product_listings.inventory_id
+    nunca foi preenchido, então o bucket precisa vir do item_detail
+    buscado na hora, não de uma coluna do banco."""
+
+    def test_finds_inventory_id_on_matching_variation(self):
+        assert extract_inventory_id_from_item(ITEM_DETAIL, VARIATION_ID) == "PJVF21758"
+
+    def test_variation_without_inventory_id_is_proprio(self):
+        assert extract_inventory_id_from_item(ITEM_DETAIL_PROPRIO, VARIATION_ID) is None
+
+    def test_unknown_variation_returns_none(self):
+        assert extract_inventory_id_from_item(ITEM_DETAIL, "999999999") is None
+
+    def test_no_variation_id_uses_top_level(self):
+        assert extract_inventory_id_from_item({"inventory_id": "INV-TOP"}, "") == "INV-TOP"
+
+
+class TestResolveBucketAndSaldoMl:
+    def test_full_when_inventory_id_present(self):
+        client = _FakeMlClient(item_detail=ITEM_DETAIL, inventory_stock=INVENTORY_STOCK)
+        bucket, saldo = resolve_bucket_and_saldo_ml(client, "MLB1", VARIATION_ID)
+        assert bucket == "full"
+        assert saldo == 1  # do inventory_stock, não do item_detail
+
+    def test_proprio_when_no_inventory_id(self):
+        client = _FakeMlClient(item_detail=ITEM_DETAIL_PROPRIO)
+        bucket, saldo = resolve_bucket_and_saldo_ml(client, "MLB1", VARIATION_ID)
+        assert bucket == "proprio"
+        assert saldo == 1  # available_quantity direto da variação, sem 2ª chamada
+
+    def test_inventory_call_failure_keeps_bucket_full(self):
+        """Achou inventory_id (é Full), mas a 2ª chamada falha — não perde
+        o bucket já sabido, só o saldo fica None."""
+        class _FlakyInventoryClient(_FakeMlClient):
+            def get_inventory_stock(self, inventory_id):
+                raise RuntimeError("timeout")
+
+        errors = []
+        bucket, saldo = resolve_bucket_and_saldo_ml(
+            _FlakyInventoryClient(item_detail=ITEM_DETAIL), "MLB1", VARIATION_ID,
+            on_partial_error=errors.append,
+        )
+        assert bucket == "full"
+        assert saldo is None
+        assert len(errors) == 1
+
+    def test_item_detail_failure_propagates(self):
+        """Sem item_detail não dá nem pra saber o bucket — propaga, não
+        finge um resultado."""
+        class _FlakyItemClient(_FakeMlClient):
+            def get_item_detail(self, item_id):
+                raise RuntimeError("timeout")
+
+        with pytest.raises(RuntimeError):
+            resolve_bucket_and_saldo_ml(_FlakyItemClient(), "MLB1", VARIATION_ID)
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -126,16 +197,18 @@ class TestLedgerSaldo:
 
 
 class TestListingForSku:
-    def test_finds_listing_with_inventory_id(self, db):
+    def test_finds_listing(self, db):
+        """Só item_id/variation_id — o bucket não vem mais daqui (ver
+        TestResolveBucketAndSaldoMl)."""
         _insert_product(db)
         db.execute(
-            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, inventory_id, imported_at, created_at, updated_at) "
-            "VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', 'V1', 'INV1', 't', 't', 't')"
+            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            "VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', 'V1', 't', 't', 't')"
         )
         db.commit()
         row = listing_for_sku(db, "DRIFT-185-AZU")
         assert row["item_id"] == "MLB1"
-        assert row["inventory_id"] == "INV1"
+        assert row["variation_id"] == "V1"
 
     def test_no_listing_returns_none(self, db):
         assert listing_for_sku(db, "SEM-LISTING") is None
@@ -180,16 +253,17 @@ class TestReconcile:
         assert row["divergencia"] == -4
 
     def test_proprio_bucket_end_to_end(self, db):
-        """Listing sem inventory_id -> bucket 'proprio', consulta get_item_detail."""
+        """Variação sem inventory_id no item_detail -> bucket 'proprio'
+        (não depende mais de nenhuma coluna de product_listings)."""
         _insert_product(db)
         db.execute(
-            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, inventory_id, imported_at, created_at, updated_at) "
-            f"VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', '{VARIATION_ID}', NULL, 't', 't', 't')"
+            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            f"VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', '{VARIATION_ID}', 't', 't', 't')"
         )
         _insert_movement(db, "DRIFT-185-AZU", "laser", "estoque_pronto", 1, "2026-09-15", "m1")
         db.commit()
 
-        summary = reconcile(db, _FakeMlClient(), days=7)
+        summary = reconcile(db, _FakeMlClient(item_detail=ITEM_DETAIL_PROPRIO), days=7)
 
         snap = summary.snapshots[0]
         assert snap.local == "proprio"
@@ -259,15 +333,17 @@ class TestReconcile:
         assert len(summary.snapshots) == 1
         assert db.execute("SELECT COUNT(*) FROM stock_snapshots").fetchone()[0] == 0
 
-    def test_ml_call_failure_reported_not_fatal(self, db):
+    def test_inventory_call_failure_still_writes_snapshot_with_known_bucket(self, db):
+        """Bucket já foi determinado (é Full) antes da falha — o snapshot
+        ainda é gravado, só o saldo do ML fica NULL."""
         class _FlakyClient(_FakeMlClient):
             def get_inventory_stock(self, inventory_id):
                 raise RuntimeError("timeout")
 
         _insert_product(db)
         db.execute(
-            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, inventory_id, imported_at, created_at, updated_at) "
-            f"VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', '{VARIATION_ID}', '{INVENTORY_ID}', 't', 't', 't')"
+            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            f"VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', '{VARIATION_ID}', 't', 't', 't')"
         )
         _insert_movement(db, "DRIFT-185-AZU", "estoque_pronto", "full", 5, "2026-09-15", "m1")
         db.commit()
@@ -275,8 +351,30 @@ class TestReconcile:
         summary = reconcile(db, _FlakyClient(), days=7)
         assert len(summary.errors) == 1
         snap = summary.snapshots[0]
+        assert snap.local == "full"
         assert snap.saldo_declarado_ml is None
         assert snap.divergencia is None
-        row = db.execute("SELECT saldo_declarado_ml, divergencia FROM stock_snapshots").fetchone()
+        row = db.execute("SELECT local, saldo_declarado_ml, divergencia FROM stock_snapshots").fetchone()
+        assert row["local"] == "full"
         assert row["saldo_declarado_ml"] is None
         assert row["divergencia"] is None
+
+    def test_item_detail_failure_skips_snapshot_entirely(self, db):
+        """Sem item_detail não dá nem pra saber o bucket — nenhum snapshot
+        é gravado pra esse SKU (diferente da falha só no inventory, acima)."""
+        class _FlakyClient(_FakeMlClient):
+            def get_item_detail(self, item_id):
+                raise RuntimeError("timeout")
+
+        _insert_product(db)
+        db.execute(
+            "INSERT INTO product_listings (sku_axen, platform, item_id, variation_id, imported_at, created_at, updated_at) "
+            f"VALUES ('DRIFT-185-AZU', 'mercadolivre', 'MLB1', '{VARIATION_ID}', 't', 't', 't')"
+        )
+        _insert_movement(db, "DRIFT-185-AZU", "estoque_pronto", "full", 5, "2026-09-15", "m1")
+        db.commit()
+
+        summary = reconcile(db, _FlakyClient(), days=7)
+        assert len(summary.errors) == 1
+        assert summary.snapshots == []
+        assert db.execute("SELECT COUNT(*) FROM stock_snapshots").fetchone()[0] == 0
