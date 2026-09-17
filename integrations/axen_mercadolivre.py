@@ -543,20 +543,27 @@ class MercadoLivreIntegration(BaseIntegration):
 
     def get_item_detail(self, item_id: str) -> dict:
         """
-        GET /items/{id}?attributes=id,title,pictures,variations,available_quantity
+        GET /items/{id}?attributes=id,title,pictures,variations,available_quantity,inventory_id
 
         Requested with an explicit `attributes` filter (rather than the full
         item payload) so the response includes `pictures` and `variations` —
         both needed for the product-registration mapping (item 0.3).
-        `available_quantity` added for S2's reconciliation engine (item
-        0.7.3) — items WITH variations already return each variation's own
-        available_quantity regardless of this filter (confirmed in the Fase
-        0 spike fixture), but a simple item with no variations needs it
-        requested explicitly at the top level, or it comes back missing.
+        `available_quantity`/`inventory_id` added for S2's reconciliation
+        engine (item 0.7.3) — items WITH variations already return each
+        variation's own available_quantity/inventory_id regardless of this
+        filter (confirmed in the Fase 0 spike fixture: each variation object
+        always comes back complete), but a SIMPLE item (no variations) has
+        both as top-level fields that respect the filter — omitted here,
+        they silently come back None. Real bug found in production
+        (17/09/2026): 4 simple-item SKUs (Arrow, Forge) were misclassified
+        as 'proprio' by check_divergences.py because inventory_id came back
+        None even though the item genuinely uses Fulfillment — confirmed via
+        the unfiltered payload, which does carry `"inventory_id": "ROXP26444"`
+        at the top level for one of them.
         """
         return self._get_authed(
             f"/items/{item_id}",
-            attributes="id,title,pictures,variations,available_quantity",
+            attributes="id,title,pictures,variations,available_quantity,inventory_id",
         )
 
     def get_inventory_stock(self, inventory_id: str) -> dict:
