@@ -543,15 +543,27 @@ class MercadoLivreIntegration(BaseIntegration):
 
     def get_item_detail(self, item_id: str) -> dict:
         """
-        GET /items/{id}?attributes=id,title,pictures,variations
+        GET /items/{id}?attributes=id,title,pictures,variations,available_quantity,inventory_id
 
         Requested with an explicit `attributes` filter (rather than the full
         item payload) so the response includes `pictures` and `variations` —
         both needed for the product-registration mapping (item 0.3).
+        `available_quantity`/`inventory_id` added for S2's reconciliation
+        engine (item 0.7.3) — items WITH variations already return each
+        variation's own available_quantity/inventory_id regardless of this
+        filter (confirmed in the Fase 0 spike fixture: each variation object
+        always comes back complete), but a SIMPLE item (no variations) has
+        both as top-level fields that respect the filter — omitted here,
+        they silently come back None. Real bug found in production
+        (17/09/2026): 4 simple-item SKUs (Arrow, Forge) were misclassified
+        as 'proprio' by check_divergences.py because inventory_id came back
+        None even though the item genuinely uses Fulfillment — confirmed via
+        the unfiltered payload, which does carry `"inventory_id": "ROXP26444"`
+        at the top level for one of them.
         """
         return self._get_authed(
             f"/items/{item_id}",
-            attributes="id,title,pictures,variations",
+            attributes="id,title,pictures,variations,available_quantity,inventory_id",
         )
 
     def get_inventory_stock(self, inventory_id: str) -> dict:
@@ -621,11 +633,16 @@ class MercadoLivreIntegration(BaseIntegration):
                     results.append(entry["body"])
         return results
 
-    def get_orders_search_raw(self, days: int = 30) -> dict:
+    def get_orders_search_raw(self, days: int = 30, offset: int = 0, limit: int = 50) -> dict:
         """
         GET /orders/search?seller=<seller>&date_created.from=…&sort=date_desc —
         raw response (unnormalised). Same query shape as get_sales_report(),
         kept separate so the spike can capture the untouched payload.
+
+        offset/limit (added for S2's order collector — get_paginated_orders_search()
+        below loops this to cover windows with more orders than one page):
+        ML's own defaults/limits apply when omitted; existing callers that
+        don't pass them keep the original one-page behaviour.
         """
         from datetime import datetime, timedelta, timezone
 
@@ -636,8 +653,31 @@ class MercadoLivreIntegration(BaseIntegration):
             "/orders/search",
             seller=self._seller_id,
             sort="date_desc",
+            offset=offset,
+            limit=limit,
             **{"date_created.from": since},
         )
+
+    def get_paginated_orders_search(self, days: int = 7, page_size: int = 50) -> list[dict]:
+        """
+        Loops get_orders_search_raw() with offset/limit until every order in
+        the window is fetched (per paging.total in the response), returning
+        the concatenated `results` list. Added for S2's order collector —
+        a single call truncates at ML's page limit (paging.limit in the
+        fixture spike was 51 of 73 total for a 30-day window).
+        """
+        offset = 0
+        all_results: list[dict] = []
+        while True:
+            raw = self.get_orders_search_raw(days=days, offset=offset, limit=page_size)
+            results = raw.get("results", []) if isinstance(raw, dict) else []
+            all_results.extend(results)
+            paging = raw.get("paging", {}) if isinstance(raw, dict) else {}
+            total = paging.get("total", len(all_results))
+            offset += len(results)
+            if not results or offset >= total:
+                break
+        return all_results
 
     def get_items_search_raw(self, limit: int = 100) -> dict:
         """

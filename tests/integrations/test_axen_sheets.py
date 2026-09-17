@@ -162,8 +162,9 @@ class TestIsEnabled:
 
 class TestParseMovimentoRow:
     def test_valid_row(self):
-        row = parse_movimento_row(_movimento_raw())
+        row = parse_movimento_row(_movimento_raw(), row_number=1)
         assert row == MovimentoRow(
+            row_number=1,
             data="2026-09-15 10:30",
             sku_axen="DRIFT-185-AZU",
             tipo="compra_recebida",
@@ -223,8 +224,9 @@ class TestParseMovimentoRow:
 
 class TestParseContagemRow:
     def test_valid_row(self):
-        row = parse_contagem_row(_contagem_raw())
+        row = parse_contagem_row(_contagem_raw(), row_number=1)
         assert row == ContagemRow(
+            row_number=1,
             data_contagem="2026-09-15",
             sku_axen="DRIFT-185-AZU",
             local="estoque_pronto",
@@ -284,6 +286,16 @@ class TestReadMovimentos:
         assert result.errors[0].row_number == 2
         assert "tipo" in result.errors[0].message
 
+    def test_valid_rows_carry_their_spreadsheet_row_number(self):
+        """S2: row_number alimenta a dedupe_key do job de persistência — precisa
+        vir certo mesmo quando uma linha anterior falhou na validação."""
+        rows = [_movimento_raw(tipo="lixo"), _movimento_raw(sku_axen="TAG-19-PTO")]
+        fake = _build_client("sheet-id", "Movimentos", rows)
+        client = AxenSheetsClient(client=fake)
+        result = client.read_movimentos("sheet-id")
+        assert len(result.rows) == 1
+        assert result.rows[0].row_number == 2  # a linha 1 falhou, a válida é a 2ª
+
     def test_custom_worksheet_name(self):
         fake = _build_client("sheet-id", "MovimentosTeste", [_movimento_raw()])
         client = AxenSheetsClient(client=fake)
@@ -314,6 +326,14 @@ class TestReadContagem:
         assert len(result.rows) == 1
         assert len(result.errors) == 1
         assert result.errors[0].row_number == 2
+
+    def test_valid_rows_carry_their_spreadsheet_row_number(self):
+        rows = [_contagem_raw(local="nave-mãe"), _contagem_raw()]
+        fake = _build_client("sheet-id", "Contagem", rows)
+        client = AxenSheetsClient(client=fake)
+        result = client.read_contagem("sheet-id")
+        assert len(result.rows) == 1
+        assert result.rows[0].row_number == 2
 
 
 class TestReadWithStrayColumns:

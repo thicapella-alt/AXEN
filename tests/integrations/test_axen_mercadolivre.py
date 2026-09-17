@@ -660,7 +660,7 @@ class TestGetItemDetail:
         url = client.get.call_args[0][0]
         assert url.endswith("/items/MLB1")
         params = client.get.call_args[1]["params"]
-        assert params["attributes"] == "id,title,pictures,variations"
+        assert params["attributes"] == "id,title,pictures,variations,available_quantity,inventory_id"
 
 
 class TestGetInventoryStock:
@@ -764,6 +764,64 @@ class TestGetOrdersSearchRaw:
         params = client.get.call_args[1]["params"]
         assert params["seller"] == "123456789"
         assert "date_created.from" in params
+
+    def test_offset_and_limit_passed_through(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={"results": []})
+        MercadoLivreIntegration(client=client).get_orders_search_raw(offset=50, limit=25)
+        params = client.get.call_args[1]["params"]
+        assert params["offset"] == 50
+        assert params["limit"] == 25
+
+
+class TestGetPaginatedOrdersSearch:
+
+    def test_single_page_when_total_fits(self, monkeypatch):
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={
+            "results": [{"id": 1}, {"id": 2}],
+            "paging": {"total": 2, "offset": 0, "limit": 50},
+        })
+        results = MercadoLivreIntegration(client=client).get_paginated_orders_search()
+        assert len(results) == 2
+        assert client.get.call_count == 1
+
+    def test_loops_until_total_covered(self, monkeypatch):
+        """paging.total=73 com page_size=50 — reproduz o fixture real do spike
+        (73 pedidos, 1ª página trouxe 51)."""
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = MagicMock()
+        page1 = _mock_response({
+            "results": [{"id": i} for i in range(50)],
+            "paging": {"total": 73, "offset": 0, "limit": 50},
+        })
+        page2 = _mock_response({
+            "results": [{"id": i} for i in range(50, 73)],
+            "paging": {"total": 73, "offset": 50, "limit": 50},
+        })
+        client.get.side_effect = [page1, page2]
+
+        results = MercadoLivreIntegration(client=client).get_paginated_orders_search()
+
+        assert len(results) == 73
+        assert client.get.call_count == 2
+        second_call_params = client.get.call_args_list[1][1]["params"]
+        assert second_call_params["offset"] == 50
+
+    def test_empty_results_stops_loop(self, monkeypatch):
+        """Nunca entra em loop infinito se a API devolver menos do que paging.total sugere."""
+        _ml_env(monkeypatch)
+        _patch_user_token(monkeypatch)
+        client = _get_only_client(get_body={
+            "results": [],
+            "paging": {"total": 100, "offset": 0, "limit": 50},
+        })
+        results = MercadoLivreIntegration(client=client).get_paginated_orders_search()
+        assert results == []
+        assert client.get.call_count == 1
 
 
 class TestGetItemsSearchRaw:

@@ -114,6 +114,8 @@ def is_enabled() -> bool:
 
 @dataclass(frozen=True)
 class MovimentoRow:
+    row_number: int  # 1-based, contando a partir da 1ª linha de dado (cabeçalho excluído) —
+                      # usado pelo job de persistência (S2) como chave de dedupe/idempotência
     data: str
     sku_axen: str
     tipo: str
@@ -126,6 +128,7 @@ class MovimentoRow:
 
 @dataclass(frozen=True)
 class ContagemRow:
+    row_number: int  # idem MovimentoRow.row_number
     data_contagem: str
     sku_axen: str
     local: str
@@ -188,10 +191,14 @@ def _parse_optional_nonneg_int(value: Any) -> Optional[int]:
     return as_int
 
 
-def parse_movimento_row(raw: dict) -> MovimentoRow:
+def parse_movimento_row(raw: dict, row_number: int = 0) -> MovimentoRow:
     """
     Parse+validate one raw Movimentos row (as returned by
     gspread's get_all_records — a dict keyed by header).
+
+    row_number: 1-based position among data rows (header excluded) — carried
+    into MovimentoRow.row_number for the persistence job's dedupe key.
+    Defaults to 0 for direct/standalone calls that don't track position.
 
     Raises ValueError with a human-readable message on any invalid field.
     """
@@ -228,6 +235,7 @@ def parse_movimento_row(raw: dict) -> MovimentoRow:
         raise ValueError("data vazia")
 
     return MovimentoRow(
+        row_number=row_number,
         data=data,
         sku_axen=sku_axen,
         tipo=tipo,
@@ -239,8 +247,12 @@ def parse_movimento_row(raw: dict) -> MovimentoRow:
     )
 
 
-def parse_contagem_row(raw: dict) -> ContagemRow:
-    """Parse+validate one raw Contagem row. Raises ValueError on invalid fields."""
+def parse_contagem_row(raw: dict, row_number: int = 0) -> ContagemRow:
+    """
+    Parse+validate one raw Contagem row. Raises ValueError on invalid fields.
+
+    row_number: idem parse_movimento_row.
+    """
     sku_axen = _clean_str(raw.get("sku_axen"))
     if not sku_axen:
         raise ValueError("sku_axen vazio")
@@ -265,6 +277,7 @@ def parse_contagem_row(raw: dict) -> ContagemRow:
         raise ValueError("data_contagem vazia")
 
     return ContagemRow(
+        row_number=row_number,
         data_contagem=data_contagem,
         sku_axen=sku_axen,
         local=local,
@@ -347,7 +360,7 @@ class AxenSheetsClient:
         errors: list[RowError] = []
         for i, raw in enumerate(raw_rows, start=1):
             try:
-                rows.append(parse_movimento_row(raw))
+                rows.append(parse_movimento_row(raw, row_number=i))
             except ValueError as exc:
                 errors.append(RowError(row_number=i, message=str(exc), raw=raw))
         if errors:
@@ -372,7 +385,7 @@ class AxenSheetsClient:
         errors: list[RowError] = []
         for i, raw in enumerate(raw_rows, start=1):
             try:
-                rows.append(parse_contagem_row(raw))
+                rows.append(parse_contagem_row(raw, row_number=i))
             except ValueError as exc:
                 errors.append(RowError(row_number=i, message=str(exc), raw=raw))
         if errors:

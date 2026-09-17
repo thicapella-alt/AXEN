@@ -286,6 +286,323 @@ class TestMigrateV4:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  MIGRATION V5 TESTS — stock_movements + stock_snapshots (S2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _insert_product(db, sku_axen="DRIFT-185-AZU", model="Drift"):
+    db.execute(
+        "INSERT INTO products (sku_axen, model, created_at, updated_at) VALUES (?, ?, 't', 't')",
+        (sku_axen, model),
+    )
+
+
+class TestMigrateV5:
+    def test_v5_indices_created(self, db):
+        indices = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_stock_movements_sku_data",
+            "idx_stock_movements_tipo",
+            "idx_stock_movements_fonte",
+            "idx_stock_snapshots_sku",
+            "idx_stock_snapshots_divergencia",
+        }
+        assert required.issubset(indices), f"Missing indices: {required - indices}"
+
+    def _insert_movement(self, db, **overrides):
+        row = {
+            "data": "2026-09-15",
+            "sku_axen": "DRIFT-185-AZU",
+            "tipo": "compra_recebida",
+            "quantidade": 10,
+            "local_origem": "fornecedor",
+            "local_destino": "estoque_bruto",
+            "referencia": "",
+            "observacao": "",
+            "fonte": "planilha_movimentos",
+            "dedupe_key": "planilha_movimentos:sheet1:Movimentos:2",
+            "ingested_at": "t",
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO stock_movements (
+                data, sku_axen, tipo, quantidade, local_origem, local_destino,
+                referencia, observacao, fonte, dedupe_key, ingested_at
+            ) VALUES (:data, :sku_axen, :tipo, :quantidade, :local_origem, :local_destino,
+                      :referencia, :observacao, :fonte, :dedupe_key, :ingested_at)
+            """,
+            row,
+        )
+
+    def test_movement_round_trip(self, db):
+        _insert_product(db)
+        self._insert_movement(db)
+        row = db.execute("SELECT * FROM stock_movements WHERE sku_axen='DRIFT-185-AZU'").fetchone()
+        assert row["tipo"] == "compra_recebida"
+        assert row["quantidade"] == 10
+        assert row["local_origem"] == "fornecedor"
+        assert row["local_destino"] == "estoque_bruto"
+        assert row["fonte"] == "planilha_movimentos"
+
+    def test_movement_requires_known_product(self, db):
+        """sku_axen must exist in products — FK enforced (PRAGMA foreign_keys=ON)."""
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db)
+
+    def test_tipo_rejects_unknown_value(self, db):
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, tipo="venda_magica", dedupe_key="x1")
+
+    @pytest.mark.parametrize("tipo", [
+        "compra_recebida", "para_laser", "de_laser", "envio_full", "recebido_full",
+        "venda_ml", "devolucao", "ajuste_contagem", "brinde", "perda",
+    ])
+    def test_tipo_accepts_all_10_documented_values(self, db, tipo):
+        """Vocabulário exato validado na Fase 0 (docs/movimentos-contagem-sheets.md)."""
+        _insert_product(db)
+        self._insert_movement(db, tipo=tipo, dedupe_key=f"x-{tipo}")
+        row = db.execute("SELECT tipo FROM stock_movements WHERE dedupe_key=?", (f"x-{tipo}",)).fetchone()
+        assert row["tipo"] == tipo
+
+    def test_local_origem_rejects_unknown_value(self, db):
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, local_origem="garagem", dedupe_key="x2")
+
+    def test_local_destino_rejects_unknown_value(self, db):
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, local_destino="garagem", dedupe_key="x3")
+
+    def test_quantidade_must_be_positive(self, db):
+        """Sempre positiva — a direção vem de origem/destino, nunca do sinal (Q1)."""
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, quantidade=0, dedupe_key="x4")
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, quantidade=-5, dedupe_key="x5")
+
+    def test_fonte_rejects_unknown_value(self, db):
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, fonte="planilha_magica", dedupe_key="x6")
+
+    def test_dedupe_key_is_unique(self, db):
+        """A segunda gravação com a mesma dedupe_key deve falhar — é assim que
+        o job de persistência evita duplicar em reexecução."""
+        _insert_product(db)
+        self._insert_movement(db, dedupe_key="same-key")
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_movement(db, dedupe_key="same-key", tipo="venda_ml",
+                                   local_origem="full", local_destino="cliente")
+
+    def test_ajuste_contagem_real_location_on_one_side(self, db):
+        """Convenção pós-correção Q2: um lado real, um lado 'ajuste' — nunca os dois iguais."""
+        _insert_product(db)
+        self._insert_movement(
+            db, tipo="ajuste_contagem", quantidade=6,
+            local_origem="ajuste", local_destino="estoque_pronto",
+            dedupe_key="planilha_contagem:sheet1:Contagem:2",
+        )
+        row = db.execute(
+            "SELECT * FROM stock_movements WHERE dedupe_key='planilha_contagem:sheet1:Contagem:2'"
+        ).fetchone()
+        assert row["local_origem"] == "ajuste"
+        assert row["local_destino"] == "estoque_pronto"
+
+    def test_saldo_calculo_via_soma_destino_menos_origem(self, db):
+        """Confirma a fórmula de saldo documentada — sem depender de sinal gravado."""
+        _insert_product(db)
+        self._insert_movement(db, tipo="compra_recebida", quantidade=10,
+                               local_origem="fornecedor", local_destino="estoque_bruto",
+                               dedupe_key="m1")
+        self._insert_movement(db, tipo="para_laser", quantidade=4,
+                               local_origem="estoque_bruto", local_destino="laser",
+                               dedupe_key="m2")
+        saldo_bruto = db.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN local_destino='estoque_bruto' THEN quantidade ELSE 0 END), 0)
+              - COALESCE(SUM(CASE WHEN local_origem='estoque_bruto' THEN quantidade ELSE 0 END), 0)
+            FROM stock_movements WHERE sku_axen='DRIFT-185-AZU'
+            """
+        ).fetchone()[0]
+        assert saldo_bruto == 6  # 10 recebidos - 4 que foram pro laser
+
+    def _insert_snapshot(self, db, **overrides):
+        row = {
+            "data": "2026-09-17",
+            "sku_axen": "DRIFT-185-AZU",
+            "local": "full",
+            "saldo_ledger": 6,
+            "saldo_declarado_ml": 6,
+            "divergencia": 0,
+            "created_at": "t",
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO stock_snapshots (
+                data, sku_axen, local, saldo_ledger, saldo_declarado_ml, divergencia, created_at
+            ) VALUES (:data, :sku_axen, :local, :saldo_ledger, :saldo_declarado_ml, :divergencia, :created_at)
+            """,
+            row,
+        )
+
+    def test_snapshot_round_trip(self, db):
+        _insert_product(db)
+        self._insert_snapshot(db)
+        row = db.execute("SELECT * FROM stock_snapshots WHERE sku_axen='DRIFT-185-AZU'").fetchone()
+        assert row["local"] == "full"
+        assert row["saldo_ledger"] == 6
+        assert row["divergencia"] == 0
+
+    def test_snapshot_local_only_full_or_proprio(self, db):
+        """Reconciliação só compara contra o que o ML expõe (Q3) — não os 8 locais do ledger."""
+        _insert_product(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_snapshot(db, local="laser")
+
+    def test_snapshot_saldo_declarado_ml_nullable(self, db):
+        """SKU sem listing mapeado ainda pode ter snapshot, só sem comparação possível."""
+        _insert_product(db)
+        self._insert_snapshot(db, saldo_declarado_ml=None, divergencia=None)
+        row = db.execute("SELECT saldo_declarado_ml, divergencia FROM stock_snapshots").fetchone()
+        assert row["saldo_declarado_ml"] is None
+        assert row["divergencia"] is None
+
+    def test_snapshot_unique_per_data_sku_local(self, db):
+        _insert_product(db)
+        self._insert_snapshot(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_snapshot(db)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MIGRATION V6 TESTS — orders + order_items (S2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMigrateV6:
+    def test_v6_indices_created(self, db):
+        indices = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_orders_status", "idx_orders_date",
+            "idx_order_items_sku", "idx_order_items_order",
+        }
+        assert required.issubset(indices), f"Missing indices: {required - indices}"
+
+    def _insert_order(self, db, **overrides):
+        row = {
+            "order_id": "2000018415699106",
+            "date_created": "2026-09-11T20:19:02.000-04:00",
+            "status": "paid",
+            "canal": "marketplace",
+            "tags": '["order_has_discount", "paid", "not_delivered"]',
+            "shipment_id": "47994433273",
+            "tipo_envio": "full",
+            "receita_bruta": 155.0,
+            "tarifa_ml": 23.25,
+            "custo_frete": 20.45,
+            "descontos": 60.0,
+            "cancelado": 0,
+            "reembolsado": 0,
+            "receita_liquida": 111.3,
+            "raw_json": "{}",
+            "ingested_at": "t",
+            "updated_at": "t",
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO orders (
+                order_id, date_created, status, canal, tags, shipment_id, tipo_envio,
+                receita_bruta, tarifa_ml, custo_frete, descontos, cancelado, reembolsado,
+                receita_liquida, raw_json, ingested_at, updated_at
+            ) VALUES (:order_id, :date_created, :status, :canal, :tags, :shipment_id, :tipo_envio,
+                      :receita_bruta, :tarifa_ml, :custo_frete, :descontos, :cancelado, :reembolsado,
+                      :receita_liquida, :raw_json, :ingested_at, :updated_at)
+            """,
+            row,
+        )
+
+    def test_order_round_trip(self, db):
+        self._insert_order(db)
+        row = db.execute("SELECT * FROM orders WHERE order_id='2000018415699106'").fetchone()
+        assert row["status"] == "paid"
+        assert row["tipo_envio"] == "full"
+        assert row["tarifa_ml"] == 23.25
+        assert row["receita_liquida"] == 111.3
+
+    def test_order_id_is_primary_key(self, db):
+        self._insert_order(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_order(db)
+
+    def _insert_item(self, db, **overrides):
+        row = {
+            "order_id": "2000018415699106",
+            "item_id": "MLB7318432106",
+            "variation_id": "",
+            "sku_axen": None,
+            "quantidade": 1,
+            "preco_unitario": 155.0,
+        }
+        row.update(overrides)
+        db.execute(
+            """
+            INSERT INTO order_items (order_id, item_id, variation_id, sku_axen, quantidade, preco_unitario)
+            VALUES (:order_id, :item_id, :variation_id, :sku_axen, :quantidade, :preco_unitario)
+            """,
+            row,
+        )
+
+    def test_item_requires_known_order(self, db):
+        """order_id must exist in orders — FK enforced."""
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_item(db)
+
+    def test_item_round_trip_with_null_sku_axen(self, db):
+        """sku_axen fica NULL quando product_listings não tem mapeamento — coletor nunca adivinha."""
+        self._insert_order(db)
+        self._insert_item(db)
+        row = db.execute("SELECT * FROM order_items WHERE item_id='MLB7318432106'").fetchone()
+        assert row["sku_axen"] is None
+        assert row["variation_id"] == ""  # null vira '' — mesmo padrão de product_listings
+
+    def test_item_resolves_sku_axen_when_mapped(self, db):
+        _insert_product(db, sku_axen="FORGE-19-CIN", model="Forge")
+        self._insert_order(db)
+        self._insert_item(db, sku_axen="FORGE-19-CIN")
+        row = db.execute("SELECT sku_axen FROM order_items WHERE item_id='MLB7318432106'").fetchone()
+        assert row["sku_axen"] == "FORGE-19-CIN"
+
+    def test_item_unique_per_order_item_variation(self, db):
+        self._insert_order(db)
+        self._insert_item(db)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._insert_item(db)
+
+    def test_item_same_item_id_different_variation_allowed(self, db):
+        """Um pedido com 2 unidades de variações diferentes do mesmo anúncio."""
+        self._insert_order(db)
+        self._insert_item(db, variation_id="")
+        self._insert_item(db, variation_id="V2")
+        count = db.execute(
+            "SELECT COUNT(*) FROM order_items WHERE order_id='2000018415699106'"
+        ).fetchone()[0]
+        assert count == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  INGEST_SCRAPE_RUN TESTS
 # ═══════════════════════════════════════════════════════════════════════════
 
